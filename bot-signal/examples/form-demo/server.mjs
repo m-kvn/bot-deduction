@@ -6,6 +6,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { detectServerClientAsync, preloadIpLists } from "../../dist/server.js";
 import { analyzeBehavioralSamples } from "../../dist/index.js";
 import {
+  BEHAVIORAL_SCORE_THRESHOLD,
+  INSTANT_SCORE_THRESHOLD,
+  combineScores,
+  decideVerdict,
+} from "./verdict.mjs";
+import {
   clearSubmissions,
   countByVerdict,
   dbFile,
@@ -21,8 +27,6 @@ const HOST = process.env.HOST ?? "127.0.0.1";
 const LIST_LIMIT = 200;
 const CHALLENGE_TTL_MS = 5 * 60_000;
 const MAX_ACTIVE_CHALLENGES = 10_000;
-const INSTANT_SCORE_THRESHOLD = 0.5;
-const BEHAVIORAL_SCORE_THRESHOLD = 0.5;
 const MIN_INTERACTION_OBSERVATION_MS = 500;
 const MAX_SUBMIT_INTENT_AGE_MS = 5_000;
 const MIN_INJECTED_KEY_EVENTS = 5;
@@ -33,6 +37,14 @@ const INJECTED_KEY_EVENT_RATIO = 0.6;
 // a program rather than typed.
 const MIN_BULK_INSERTED_CHARACTERS = 12;
 const BULK_INSERTION_RATIO = 0.6;
+
+// Per-layer thresholds alone let a careful client spread its tells so that no
+// single layer crosses the bar: 0.30 instant + 0.30 behavioral + 0.35 server is
+// a combined 0.68 and three independent pieces of evidence, but each layer
+// individually says "fine". Corroboration across layers is the thing worth
+// acting on, so the combined score decides too — but only when more than one
+// layer actually contributed, which keeps a single noisy environment signal from
+// carrying a verdict on its own.
 
 // Caps on the raw sample streams the page submits, so recomputation stays cheap
 // and a client cannot turn the audit trail into a memory attack.
@@ -353,10 +365,6 @@ function warnOnProxyIp(req, ip) {
     `Client IP ${ip} arrived without a ${CLIENT_IP_HEADER} header. If a proxy or CDN sits in ` +
       "front of this app, forward the visitor IP or set CLIENT_IP_HEADER.",
   );
-}
-
-function combineScores(scores) {
-  return 1 - scores.reduce((acc, score) => acc * (1 - score), 1);
 }
 
 function isObject(value) {
@@ -1167,22 +1175,14 @@ async function handleSubmit(req, res) {
   const serverSignals = triggered("server", server);
   const advisoryNotes = serverSignals.filter((signal) => ADVISORY_SIGNALS.has(signal.id));
   const decisive = serverSignals.filter((signal) => !ADVISORY_SIGNALS.has(signal.id));
-  const serverRejects =
-    decisive.some((signal) => signal.score >= STRONG_SIGNAL_WEIGHT) ||
-    decisive.length >= MIN_SUPPORTING_SIGNALS;
-
-  const scores = [server.suspicionScore];
-  if (instantValid) scores.push(instant.suspicionScore);
-  if (behavioralValid) scores.push(behavioral.suspicionScore);
-  if (clientSignals.length > 0) scores.push(combineScores(clientSignals.map((signal) => signal.score)));
-
-  const score = combineScores(scores);
-  const clientRejects = clientSignals.length > 0;
-  const isAgent =
-    clientRejects ||
-    serverRejects ||
-    (instantValid ? instant.suspicionScore >= INSTANT_SCORE_THRESHOLD : false) ||
-    (behavioralValid ? behavioral.suspicionScore >= BEHAVIORAL_SCORE_THRESHOLD : false);
+  const verdict = decideVerdict({
+    instantScore: instantValid ? instant.suspicionScore : null,
+    behavioralScore: behavioralValid ? behavioral.suspicionScore : null,
+    serverScore: server.suspicionScore,
+    clientSignalScores: clientSignals.map((signal) => signal.score),
+    decisiveServerScores: decisive.map((signal) => signal.score),
+  });
+  const { isAgent, score, corroboratingLayers } = verdict;
 
   const signals = [
     ...clientSignals,
@@ -1235,6 +1235,7 @@ async function handleSubmit(req, res) {
     },
     signals: signals.slice(0, 12),
     notes: advisoryNotes.map((signal) => signal.id),
+    corroboratingLayers,
   };
 
   // Deliberately after the verdict and never folded into it: `verdict` stays a
