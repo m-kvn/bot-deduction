@@ -185,3 +185,46 @@ repetition controls, not detection.
 0.30 instant + 0.30 behavioral = 0.510 — numerically identical to a reported bypass run. Tap-to-click
 produces the short-dwell, zero-movement presses `zero-jitter-clicks` looks for. `verdict_check.mjs`
 prints the table for any threshold; the decision lives in `verdict.mjs`.
+
+---
+
+## Round 5 — key hold time closes C7
+
+`498c48c` added two signals from an axis nothing here had looked at: the collector only ever listened
+for `keydown`, so how long a key was *held* was invisible.
+
+| Signal | Weight | Fires on |
+|---|---|---|
+| `synthetic-key-dwell` | 0.6 | median hold under 25 ms over 12+ pairs — `keyboard.type()` emits one atomic press, measured at 2.2 ms mean |
+| `absent-key-rollover` | 0.3 | fast typing where no two keys were ever down together, gated on median flight ≤ 220 ms so hunt-and-peck is exempt |
+
+Measured against the standing matrix:
+
+| Case | Before | Now | Why |
+|---|:---:|:---:|---|
+| C7 raw CDP `Input`+`DOM` | 🟢 human 0.00 | 🔴 **agent 0.58** | `absent-key-rollover` + `teleport-mouse` |
+| spread-evidence reproduction | 🔴 agent 0.545 | 🔴 **agent 0.818** | `synthetic-key-dwell` 0.6 — behavioral alone now rejects |
+| C4 Win32 scan-code | 🟢 human 0.00 | 🟢 human 0.00 | unchanged, and correctly so |
+
+C4 surviving is the informative result. It holds keys 18–47 ms, clearing the 25 ms dwell bar, and it
+sends genuine Shift down/up around capitals — so keys really do overlap and `absent-key-rollover` has
+nothing to report. `cdp_human.py` sets a modifier *bit* instead of dispatching a Shift key, so it
+never overlaps, and that is what gives it away. The difference is a real property of how the input was
+produced, not a threshold that happened to land well.
+
+`synthetic-key-dwell` is classified as hard evidence in `verdict.mjs`: a median hold under 25 ms is a
+claim about physiology, and the check already stands down for soft keyboards, IME composition and
+auto-repeat. `absent-key-rollover` stays circumstantial — hunt-and-peck is real.
+
+The same commit also fixed two false positives worth recording: an Android phone using "Request
+desktop site" scored **agent 0.96**, because `isEmptyPlugins` asked the User-Agent — the one field
+being spoofed — and `isTouchPrimaryDevice()` now asks the input hardware instead; and the bundled
+GeoIP database is IPv4-only with a dot-splitting parser, so every IPv6 visitor collected a spurious
+timezone and country mismatch (`2600:1700:…` parsed as 43,620,761,600 and the binary search returned
+an Australian range for all of `2000::/3`).
+
+Verified on this machine after pulling: 426 unit tests, 30 crosscheck, 86/86 harness, 69/69
+classification cases still AGENT, zero false-positive guards failing.
+
+**Still open: C4, C6, C8.** C8 shares `cdp_human.py`'s input path with C7 and is expected to fall the
+same way, but was not re-measured in this round and is not claimed.
