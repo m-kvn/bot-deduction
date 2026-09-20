@@ -1,5 +1,6 @@
 import { chromium } from "../../bot-signal/node_modules/patchright/index.mjs";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { writeFile } from "node:fs/promises";
 
 const chromePath = "C:/Program Files/Google/Chrome/Application/chrome.exe";
@@ -49,7 +50,7 @@ await writeFile(new URL("inject.ps1", import.meta.url), ps, "utf8");
 
 const psOut = await new Promise((resolve) => {
   const child = spawn("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-    new URL("inject.ps1", import.meta.url).pathname.slice(1)]);
+    fileURLToPath(new URL("inject.ps1", import.meta.url))]);
   let out = "";
   child.stdout.on("data", (c) => (out += c));
   child.stderr.on("data", (c) => (out += c));

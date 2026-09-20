@@ -81,6 +81,7 @@ optional — the defaults below are what the app uses when nothing is set.
 | Variable | Default | What it does |
 |---|---|---|
 | `PORT` | `8787` | Port the form and dashboard listen on |
+| `HOST` | `127.0.0.1` | Interface to bind. Loopback by default, so only a proxy on the same host can reach it. Set `0.0.0.0` for Docker |
 | `DB_FILE` | `examples/form-demo/submissions.db` | SQLite file; `:memory:` for an ephemeral store |
 | `TRUST_EDGE_HEADERS` | unset | **Set to `1` only behind a proxy you control.** Enables trust in `x-forwarded-proto`, the client-IP header, and the TLS/crawler headers below |
 | `CLIENT_IP_HEADER` | `x-forwarded-for` | Header your edge writes the real visitor IP into (`cf-connecting-ip`, `x-real-ip`, `true-client-ip`) — read only when `TRUST_EDGE_HEADERS=1` |
@@ -186,7 +187,7 @@ RUN cd bot-signal && npm run build
 
 FROM node:22-slim
 WORKDIR /app
-ENV NODE_ENV=production PORT=8787 DB_FILE=/data/submissions.db
+ENV NODE_ENV=production PORT=8787 HOST=0.0.0.0 DB_FILE=/data/submissions.db
 COPY --from=build /app/bot-signal/dist          ./bot-signal/dist
 COPY --from=build /app/bot-signal/data          ./bot-signal/data
 COPY --from=build /app/bot-signal/node_modules  ./bot-signal/node_modules
@@ -208,7 +209,7 @@ docker run -d --name bot-deduction -p 8787:8787 -v bot-deduction-data:/data \
 
 - Build command: `cd bot-signal && npm ci && npm run build`
 - Start command: `cd bot-signal/examples/form-demo && node server.mjs`
-- Set `PORT` to whatever the platform injects, `DB_FILE` to a path on a persistent volume, and
+- Set `PORT` to whatever the platform injects, `HOST` to `0.0.0.0` so the platform's router can reach it, `DB_FILE` to a path on a persistent volume, and
   `TRUST_EDGE_HEADERS=1` with `CLIENT_IP_HEADER` matching the platform's real-IP header.
 - Without a persistent volume the SQLite file is lost on every redeploy. Use `DB_FILE=:memory:` if
   you only need the live verdict and not the submission history.

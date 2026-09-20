@@ -1,12 +1,13 @@
 import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { chromium } from "../bot-signal/node_modules/patchright/index.mjs";
 
 const here = new URL("./", import.meta.url);
-const data = JSON.parse(await readFile(new URL("results.json", here), "utf8"));
+const data = JSON.parse(await readFile(fileURLToPath(new URL("results.json", here)), "utf8"));
 const chromeMcp = JSON.parse(
-  await readFile(new URL("chrome_devtools_mcp_results.json", here), "utf8"),
+  await readFile(fileURLToPath(new URL("chrome_devtools_mcp_results.json", here)), "utf8"),
 );
-const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const chromePath = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 
 const escapeHtml = (value) =>
   String(value ?? "")
@@ -17,7 +18,7 @@ const escapeHtml = (value) =>
     .replaceAll("'", "&#039;");
 
 const asImage = async (name) =>
-  `data:image/png;base64,${(await readFile(new URL(name, here))).toString("base64")}`;
+  `data:image/png;base64,${(await readFile(fileURLToPath(new URL(name, here)))).toString("base64")}`;
 
 const images = {
   human: await asImage("human_control.png"),
@@ -388,14 +389,14 @@ const html = `<!doctype html>
 </body>
 </html>`;
 
-await writeFile(new URL("agent_detection_test_report.html", here), html, "utf8");
+await writeFile(fileURLToPath(new URL("agent_detection_test_report.html", here)), html, "utf8");
 const pdfUrl = new URL("agent_detection_test_report.pdf", here);
 const browser = await chromium.launch({ headless: true, executablePath: chromePath });
 try {
   const page = await browser.newPage();
   await page.goto(new URL("agent_detection_test_report.html", here).href, { waitUntil: "load" });
   await page.pdf({
-    path: pdfUrl.pathname.slice(1),
+    path: fileURLToPath(pdfUrl),
     format: "A4",
     printBackground: true,
     displayHeaderFooter: true,
@@ -407,7 +408,7 @@ try {
   await browser.close();
 }
 
-await copyFile(pdfUrl, new URL("test_report.pdf", here));
+await copyFile(pdfUrl, fileURLToPath(new URL("test_report.pdf", here)));
 console.log(
   `Created focused report: ${detectionCases.length} Codex-generated classification tests, ${detectedAgents.length} agents detected, ${missedAgents.length} missed.`,
 );
