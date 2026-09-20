@@ -1,6 +1,7 @@
 import type {
   BehavioralSamples,
   BehavioralSignal,
+  ButtonSample,
   ClickSample,
   ConfidenceLevel,
   KeySample,
@@ -20,6 +21,23 @@ import type {
  * keep the surface small and the behavior predictable. Power users can copy
  * the analysis functions if they need to tune.
  */
+
+/** Injected characters need a few samples before the ratio below means anything —
+ * an emoji picker or a voice-typing snippet legitimately injects one or two. */
+const MIN_INJECTED_KEYS = 5;
+
+/** Share of printable keystrokes that must be injected before it reads as a
+ * machine filling the field rather than a human reaching for an input tool. */
+const INJECTED_KEY_RATIO = 0.6;
+
+/** `VK_PACKET` — the virtual key Windows reports for `KEYEVENTF_UNICODE` input. */
+const VK_PACKET = 231;
+
+/** Primary-button holds shorter than this are too quick to expect hand tremor. */
+const MIN_CLICK_HOLD_MS = 40;
+
+/** How many zero-jitter clicks must stack up before the run means anything. */
+const MIN_ZERO_JITTER_CLICKS = 3;
 
 /** How far back a mouse move or touch still explains a click */
 const CLICK_ORIGIN_WINDOW_MS = 2_000;
@@ -513,6 +531,106 @@ export function hasLinearTapRhythm(touches: TouchSample[] = []): boolean {
  * Any observed event was script-dispatched (`isTrusted === false`).
  * @internal
  */
+/**
+ * Detects text pushed in at the OS level rather than typed on a keyboard.
+ *
+ * `SendInput` with `KEYEVENTF_UNICODE` (and the AutoHotkey / AutoIt / PowerShell
+ * wrappers around it) sets `wVk = 0` and carries the character in the scan-code
+ * field, so Windows reports `VK_PACKET` and Chromium has no physical key to map:
+ * `code` comes through empty and `keyCode` is `231`. Real hardware always names
+ * the key it came from. The events are `isTrusted`, because the browser really
+ * did receive them from the OS — this is the only layer that can tell them apart.
+ *
+ * Verified against Chrome 140 on Windows 11: injected `"K"` reports
+ * `{ key: "K", code: "", keyCode: 231 }`, while a scan-code press of the same key
+ * reports `{ key: "b", code: "KeyB", keyCode: 66 }`.
+ *
+ * A ratio rather than a flat count, so someone who picks one emoji or dictates a
+ * word in an otherwise hand-typed form is not flagged for it.
+ * @internal
+ */
+export function hasInjectedKeyInput(keyPresses: KeySample[]): boolean {
+  const printable = keyPresses.filter(
+    (key) =>
+      key.isTrusted &&
+      key.printable === true &&
+      key.composing !== true &&
+      key.repeat !== true &&
+      key.code !== undefined,
+  );
+
+  if (printable.length === 0) {
+    return false;
+  }
+
+  const injected = printable.filter(
+    (key) => key.code === "" || key.keyCode === VK_PACKET || key.keyCode === 0,
+  );
+
+  return (
+    injected.length >= MIN_INJECTED_KEYS &&
+    injected.length / printable.length >= INJECTED_KEY_RATIO
+  );
+}
+
+/**
+ * Detects primary-button presses that never moved a single pixel while held.
+ *
+ * `mouse_event(MOUSEEVENTF_LEFTDOWN)` followed by `MOUSEEVENTF_LEFTUP` releases
+ * on the exact coordinate it pressed. A hand resting on a mouse drifts, so a run
+ * of presses held tens of milliseconds with byte-identical down and up positions
+ * and no movement in between points at injected clicks.
+ *
+ * Supporting evidence only: a steady hand on a low-DPI mouse can do this once or
+ * twice, so this never decides a verdict on its own.
+ * @internal
+ */
+export function hasZeroJitterClicks(
+  buttons: ButtonSample[] | undefined,
+  mouseMoves: MouseSample[],
+): boolean {
+  const presses = (buttons ?? []).filter((button) => button.isTrusted);
+
+  if (presses.length < MIN_ZERO_JITTER_CLICKS * 2) {
+    return false;
+  }
+
+  let zeroJitter = 0;
+  let measured = 0;
+
+  for (let index = 1; index < presses.length; index += 1) {
+    const up = presses[index];
+    const down = presses[index - 1];
+
+    if (down.kind !== "down" || up.kind !== "up") {
+      continue;
+    }
+
+    const heldMs = up.t - down.t;
+
+    if (heldMs < MIN_CLICK_HOLD_MS) {
+      continue;
+    }
+
+    measured += 1;
+
+    const movedWhileHeld = mouseMoves.some(
+      (move) => move.isTrusted && move.t > down.t && move.t < up.t,
+    );
+    const samePoint =
+      up.x === down.x &&
+      up.y === down.y &&
+      up.screenX === down.screenX &&
+      up.screenY === down.screenY;
+
+    if (samePoint && !movedWhileHeld) {
+      zeroJitter += 1;
+    }
+  }
+
+  return measured >= MIN_ZERO_JITTER_CLICKS && zeroJitter === measured;
+}
+
 export function hasSyntheticEvents(samples: BehavioralSamples): boolean {
   const events = [
     ...samples.mouseMoves,
@@ -616,6 +734,20 @@ export function buildBehavioralSignals(samples: BehavioralSamples): BehavioralSi
       hasRepeatedTypingCadence(samples.keyPresses),
       0.55,
       "high",
+    ),
+    createSignal(
+      "injected-key-input",
+      "Text was injected at the OS level instead of typed on a keyboard",
+      hasInjectedKeyInput(samples.keyPresses),
+      0.7,
+      "high",
+    ),
+    createSignal(
+      "zero-jitter-clicks",
+      "Every measured click released on the exact pixel it pressed",
+      hasZeroJitterClicks(samples.buttons, samples.mouseMoves),
+      0.3,
+      "medium",
     ),
     createSignal(
       "synthetic-events",

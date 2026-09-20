@@ -23,6 +23,7 @@ const images = {
   human: await asImage("human_control.png"),
   synthetic: await asImage("synthetic_click_detected.png"),
   headless: await asImage("headless_detected.png"),
+  osInjection: await asImage("os_injection_detected.png"),
 };
 
 const detectionCategories = new Set(["Server detection", "API bypass", "Browser detection"]);
@@ -205,7 +206,11 @@ const html = `<!doctype html>
     <thead><tr><th>Detection area</th><th>Codex-generated tests</th><th>Agents detected</th><th>Agents missed as HUMAN</th></tr></thead>
     <tbody>${statsRows}</tbody>
   </table>
-  <p>The server/request matrix detected ${groupStats[0].agentDetected} of ${groupStats[0].total} Codex-generated submissions, the API matrix detected ${groupStats[1].agentDetected} of ${groupStats[1].total}, and the browser matrix detected ${groupStats[2].agentDetected} of ${groupStats[2].total}. Human-looking automated inputs are still able to cross the browser-to-server trust boundary.</p>
+  <p>The server/request matrix detected ${groupStats[0].agentDetected} of ${groupStats[0].total} Codex-generated submissions, the API matrix detected ${groupStats[1].agentDetected} of ${groupStats[1].total}, and the browser matrix detected ${groupStats[2].agentDetected} of ${groupStats[2].total}. ${
+    missedAgents.length > 0
+      ? "Human-looking automated inputs are still able to cross the browser-to-server trust boundary."
+      : "No automated input in this matrix crossed the browser-to-server trust boundary."
+  }</p>
 
   <h2>2. Chrome DevTools MCP verification</h2>
   <p>The hardened live application was separately exercised through the Chrome DevTools MCP interface. All ${chromeMcp.total} MCP-driven agent submissions were classified as AGENT.</p>
@@ -220,11 +225,19 @@ const html = `<!doctype html>
     <tbody>${missedRows}</tbody>
   </table>
 
-  <div class="finding">
+  ${
+    missedAgents.length > 0
+      ? `<div class="finding">
     <h3>Remaining limitation — Public browser telemetry can ultimately be forged</h3>
     <p>The ${missedAgents.length} misses used human-looking forged telemetry, low-risk/advisory network profiles, or human-like CDP input. Codex initiated every one, but the app returned HUMAN because public browser telemetry and CDP-generated trusted events do not prove a person was present.</p>
     <p><strong>Impact:</strong> An automated client that avoids obvious bot artifacts can bypass the binary verdict. Missing or replayed challenges, malformed layers, obvious synthetic events, headless browsers, and known automation markers were detected.</p>
-  </div>
+  </div>`
+      : `<div class="finding">
+    <h3>Remaining limitation — A full page-load replay, and scan-code input injection</h3>
+    <p>Every scenario in this matrix is classified AGENT, but two routes remain open by construction. A script that replays a complete page load — cookie jar, every subresource with correct Fetch Metadata, a page-bound challenge and realistic timing — satisfies the provenance layer, because that layer verifies a trail rather than a person. And OS-level input injection that uses real virtual-key/scan-code pairs, rather than <code>KEYEVENTF_UNICODE</code>, produces keystrokes a browser cannot distinguish from hardware; only the pointer-level heuristics remain against it.</p>
+    <p><strong>Impact:</strong> The verdict is a risk signal, not proof of human identity. It should gate friction, not irreversible decisions.</p>
+  </div>`
+  }
   <div class="callout"><strong>Fixes verified in this run:</strong> both client layers are mandatory; scores and signals are consistency-checked; challenges are one-time, expiring and UA/IP-bound; trusted field edits and recent submit intent are required; synthetic events are decisive at threshold 0.50; proxy/TLS metadata is ignored unless trusted-edge mode is enabled.</div>
 
   <h2>4. Agent techniques successfully detected</h2>
@@ -262,10 +275,24 @@ const html = `<!doctype html>
   <div class="evidence"><img src="${images.synthetic}"><div class="caption">JavaScript <code>element.click()</code> without pointer movement: correctly classified AGENT, score 0.95.</div></div>
   <div class="evidence"><img src="${images.headless}"><div class="caption">Standard headless automation: correctly classified AGENT, score 1.00.</div></div>
 
-  <h2>9. Scope note</h2>
+  <h2 class="page-break">9. OS-level input injection</h2>
+  <p>The sharpest class of agent is one that drives a real, signed-in browser through the Windows input stack — <code>SendInput</code>, <code>keybd_event</code>, <code>mouse_event</code>, <code>SetCursorPos</code>, as used by PowerShell and AutoHotkey harnesses. Those events are genuinely <code>isTrusted</code>: the browser really did receive them from the operating system, the window is real, the page load is real, and every provenance check passes. Before this run, such a session was classified HUMAN with score 0.00.</p>
+  <p>The distinguishing artifact is how the text is pushed in. <code>SendInput</code> with <code>KEYEVENTF_UNICODE</code> sets <code>wVk = 0</code> and carries the character in the scan-code field, so Windows reports <code>VK_PACKET</code> and Chromium has no physical key to name. Measured directly against Chrome 140 on Windows 11:</p>
+  <table>
+    <thead><tr><th>Input method</th><th><code>key</code></th><th><code>code</code></th><th><code>keyCode</code></th><th><code>isTrusted</code></th></tr></thead>
+    <tbody>
+      <tr><td><code>SendInput</code> + <code>KEYEVENTF_UNICODE</code></td><td>K</td><td><em>(empty)</em></td><td>231 (<code>VK_PACKET</code>)</td><td>true</td></tr>
+      <tr><td>Scan-code key press (hardware path)</td><td>b</td><td><code>KeyB</code></td><td>66</td><td>true</td></tr>
+    </tbody>
+  </table>
+  <p>The <code>injected-key-input</code> signal fires when at least five printable keystrokes, and at least 60% of them, arrive without a physical key behind them — a ratio, so that an emoji picker or a dictated word inside an otherwise hand-typed form is not flagged. The demo server enforces the same rule on the submitted interaction record, so a tampered page bundle cannot simply drop the evidence.</p>
+  <div class="evidence"><img src="${images.osInjection}"><div class="caption">Real PowerShell <code>SendInput</code> session — curved <code>SetCursorPos</code> pointer paths, randomised per-character delays, <code>mouse_event</code> clicks, genuine page load: now classified AGENT, score 0.94, HTTP 403, on <code>behavioral:injected-key-input</code> and <code>client:untrusted-form-interaction</code>.</div></div>
+  <p class="footnote">A rewrite that injects real virtual-key/scan-code pairs instead of Unicode packets defeats this specific signal — the keystrokes become indistinguishable from hardware. The supporting <code>zero-jitter-clicks</code> heuristic covers part of the pointer side, but this class of attack is not closed by client-side signals alone.</p>
+
+  <h2>10. Scope note</h2>
   <p>This is a risk-based set of ${detectionCases.length} classification scenarios covering the app's documented layers and the requested Chrome/DOM/JavaScript/request techniques. “All possible” browser and network combinations are not finite; the report does not certify every OS, browser version, mobile device, assistive technology, extension, proxy or TLS terminator.</p>
   <p>Chrome DevTools MCP was used directly for native MCP form filling/clicking and MCP-executed <code>HTMLElement.click()</code>, <code>form.requestSubmit()</code>, and synthetic submit dispatch. The wider matrix additionally used installed Google Chrome through Patchright and raw requests.</p>
-  <p class="footnote">Fourteen additional functionality/security checks also passed (page/dashboard loading, validation, HTTP handling, storage limits, Unicode, dashboard consistency/reset and output encoding). They are excluded from the headline numbers because they do not answer HUMAN versus AGENT.</p>
+  <p class="footnote">${data.results.length - detectionCases.length} additional functionality, false-positive-guard and security checks also passed (page/dashboard loading, validation, HTTP handling, storage limits, Unicode, dashboard consistency/reset and output encoding). They are excluded from the headline numbers because they do not answer HUMAN versus AGENT.</p>
 </body>
 </html>`;
 

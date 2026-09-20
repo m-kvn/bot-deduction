@@ -13,6 +13,8 @@ const interaction = {
   trustedChangeEvents: 0,
   trustedFocusEvents: 0,
   untrustedFormEvents: 0,
+  printableKeyEvents: 0,
+  injectedKeyEvents: 0,
   editedFields: new Set(),
   submitIntent: null,
 };
@@ -76,6 +78,19 @@ function recordEditEvent(event) {
 for (const type of ["beforeinput", "input", "change"]) {
   form.addEventListener(type, recordEditEvent, true);
 }
+
+form.addEventListener(
+  "keydown",
+  (event) => {
+    if (!event.isTrusted || event.isComposing || event.repeat) return;
+    if (typeof event.key !== "string" || [...event.key].length !== 1) return;
+    interaction.printableKeyEvents += 1;
+    if (event.code === "" || event.keyCode === 231 || event.keyCode === 0) {
+      interaction.injectedKeyEvents += 1;
+    }
+  },
+  true,
+);
 
 form.addEventListener(
   "focusin",
@@ -257,6 +272,8 @@ form.addEventListener("submit", async (event) => {
         submitIntentType: interaction.submitIntent?.type ?? null,
         submitIntentAgeMs,
         untrustedFormEvents: interaction.untrustedFormEvents,
+        printableKeyEvents: interaction.printableKeyEvents,
+        injectedKeyEvents: interaction.injectedKeyEvents,
       },
     },
   };

@@ -1,0 +1,15 @@
+<!doctype html><html><head><title>BSPROBE-WINDOW</title></head><body>
+<input id="f" autofocus style="width:600px;font-size:28px" />
+<pre id="out"></pre>
+<script>
+window.__log = [];
+document.getElementById('f').addEventListener('keydown', (e) => {
+  window.__log.push({
+    type: 'keydown', key: e.key, code: e.code, keyCode: e.keyCode, which: e.which,
+    charCode: e.charCode, isTrusted: e.isTrusted, isComposing: e.isComposing,
+    location: e.location, repeat: e.repeat
+  });
+  document.getElementById('out').textContent = JSON.stringify(window.__log, null, 1);
+});
+document.getElementById('f').focus();
+</script></body></html>

@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-09-20T04:49:40.467Z",
+  "generatedAt": "2026-09-20T07:29:58.145Z",
   "target": "http://localhost:8787/index.html",
   "isolatedTarget": "http://127.0.0.1:8877",
   "browser": "Google Chrome via Patchright (headful) plus Patchright Chromium (headless)",
   "scope": "Functional, DOM, synthetic events, browser fingerprint, direct API, server headers/IP/TLS, dashboard",
-  "total": 76,
-  "passed": 76,
+  "total": 78,
+  "passed": 78,
   "failed": 0,
   "browserErrors": [],
   "results": [
@@ -562,6 +562,28 @@
     {
       "id": "TC-051",
       "category": "Browser detection",
+      "name": "OS-level SendInput text injection into a real browser",
+      "vector": "KEYEVENTF_UNICODE / VK_PACKET keystrokes — trusted events, real window, real page load",
+      "expected": "AGENT",
+      "actual": "AGENT, score 0.94",
+      "passed": true,
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:injected-key-input",
+      "severity": ""
+    },
+    {
+      "id": "TC-052",
+      "category": "False-positive guard",
+      "name": "Hardware-keycode control does not trip the injection signal",
+      "vector": "Input.dispatchKeyEvent with a real code/keyCode pair",
+      "expected": "injected-key-input stays quiet for keystrokes that name a physical key",
+      "actual": "behavioral chip: behavioral: 0.35 human",
+      "passed": true,
+      "evidence": "Guards the OS-injection signal against flagging ordinary typing",
+      "severity": ""
+    },
+    {
+      "id": "TC-053",
+      "category": "Browser detection",
       "name": "HTMLElement.click() without pointer movement",
       "vector": "JavaScript button.click()",
       "expected": "AGENT",
@@ -571,7 +593,7 @@
       "severity": ""
     },
     {
-      "id": "TC-052",
+      "id": "TC-054",
       "category": "Browser detection",
       "name": "dispatchEvent(new MouseEvent('click'))",
       "vector": "DOM dispatchEvent click",
@@ -582,7 +604,7 @@
       "severity": ""
     },
     {
-      "id": "TC-053",
+      "id": "TC-055",
       "category": "Browser detection",
       "name": "HTMLElement.click() after trusted mouse movement",
       "vector": "Trusted move immediately followed by synthetic click",
@@ -593,7 +615,7 @@
       "severity": ""
     },
     {
-      "id": "TC-054",
+      "id": "TC-056",
       "category": "Browser detection",
       "name": "dispatchEvent click after trusted mouse movement",
       "vector": "Trusted move masks click-without-movement heuristic",
@@ -604,7 +626,7 @@
       "severity": ""
     },
     {
-      "id": "TC-055",
+      "id": "TC-057",
       "category": "Browser detection",
       "name": "form.requestSubmit()",
       "vector": "DOM requestSubmit without pointer/keyboard event",
@@ -615,7 +637,7 @@
       "severity": ""
     },
     {
-      "id": "TC-056",
+      "id": "TC-058",
       "category": "Browser detection",
       "name": "dispatchEvent(new Event('submit'))",
       "vector": "Synthetic submit event not monitored by behavioral layer",
@@ -626,7 +648,7 @@
       "severity": ""
     },
     {
-      "id": "TC-057",
+      "id": "TC-059",
       "category": "Browser detection",
       "name": "Enter-key form submission",
       "vector": "Single trusted keyboard event after DOM value assignment",
@@ -637,7 +659,7 @@
       "severity": ""
     },
     {
-      "id": "TC-058",
+      "id": "TC-060",
       "category": "Browser detection",
       "name": "Synthetic rapid key sequence",
       "vector": "Six untrusted keydown events then requestSubmit",
@@ -648,7 +670,7 @@
       "severity": ""
     },
     {
-      "id": "TC-059",
+      "id": "TC-061",
       "category": "Browser detection",
       "name": "Synthetic linear mouse path",
       "vector": "Fourteen uniform untrusted mousemove events",
@@ -659,7 +681,7 @@
       "severity": ""
     },
     {
-      "id": "TC-060",
+      "id": "TC-062",
       "category": "Browser detection",
       "name": "Synthetic uniform scrolling",
       "vector": "Eight equal untrusted wheel events at equal cadence",
@@ -670,7 +692,7 @@
       "severity": ""
     },
     {
-      "id": "TC-061",
+      "id": "TC-063",
       "category": "Browser detection",
       "name": "Synthetic teleporting pointer",
       "vector": "Untrusted >600px mouse jump",
@@ -681,7 +703,7 @@
       "severity": ""
     },
     {
-      "id": "TC-062",
+      "id": "TC-064",
       "category": "Browser detection",
       "name": "Synthetic linear touch gesture",
       "vector": "Untrusted touchstart/touchmove sequence",
@@ -692,7 +714,7 @@
       "severity": ""
     },
     {
-      "id": "TC-063",
+      "id": "TC-065",
       "category": "Browser detection",
       "name": "navigator.webdriver marker",
       "vector": "WebDriver fingerprint",
@@ -703,7 +725,7 @@
       "severity": ""
     },
     {
-      "id": "TC-064",
+      "id": "TC-066",
       "category": "Browser detection",
       "name": "Playwright global marker",
       "vector": "window.__playwright artifact",
@@ -714,7 +736,7 @@
       "severity": ""
     },
     {
-      "id": "TC-065",
+      "id": "TC-067",
       "category": "Browser detection",
       "name": "Puppeteer global marker",
       "vector": "window.__puppeteer_evaluation_script__ artifact",
@@ -725,7 +747,7 @@
       "severity": ""
     },
     {
-      "id": "TC-066",
+      "id": "TC-068",
       "category": "Browser detection",
       "name": "Selenium global marker",
       "vector": "window._selenium artifact",
@@ -736,7 +758,7 @@
       "severity": ""
     },
     {
-      "id": "TC-067",
+      "id": "TC-069",
       "category": "Browser detection",
       "name": "DOM automation controller marker",
       "vector": "window.domAutomationController artifact",
@@ -747,7 +769,7 @@
       "severity": ""
     },
     {
-      "id": "TC-068",
+      "id": "TC-070",
       "category": "Browser detection",
       "name": "Implausibly small screen",
       "vector": "120×160 viewport and screen",
@@ -758,7 +780,7 @@
       "severity": ""
     },
     {
-      "id": "TC-069",
+      "id": "TC-071",
       "category": "Browser detection",
       "name": "Tampered navigator.languages getter",
       "vector": "navigator.languages emptied with a patched native getter",
@@ -769,7 +791,7 @@
       "severity": ""
     },
     {
-      "id": "TC-070",
+      "id": "TC-072",
       "category": "API bypass",
       "name": "In-page fetch with forged clean client scores",
       "vector": "JavaScript fetch() using genuine browser headers",
@@ -780,18 +802,18 @@
       "severity": ""
     },
     {
-      "id": "TC-071",
+      "id": "TC-073",
       "category": "Submission methods",
       "name": "HTMLFormElement.prototype.submit()",
       "vector": "Native submit bypasses app submit listener",
       "expected": "Not accepted by /api/submit",
-      "actual": "No observed POST; records 32 → 32",
+      "actual": "No observed POST; records 33 → 33",
       "passed": true,
       "evidence": "Default form action does not create an API submission",
       "severity": ""
     },
     {
-      "id": "TC-072",
+      "id": "TC-074",
       "category": "Browser detection",
       "name": "Standard headless Patchright browser",
       "vector": "Headless browser + automated fill/click",
@@ -802,18 +824,18 @@
       "severity": ""
     },
     {
-      "id": "TC-073",
+      "id": "TC-075",
       "category": "Dashboard",
       "name": "Dashboard counts and rows match API",
       "vector": "Rendered dashboard versus GET /api/submissions",
-      "expected": "33 total / 0 human / 33 agent",
-      "actual": "33 total / 0 human / 33 agent; 33 rows",
+      "expected": "34 total / 0 human / 34 agent",
+      "actual": "34 total / 0 human / 34 agent; 34 rows",
       "passed": true,
       "evidence": "",
       "severity": ""
     },
     {
-      "id": "TC-074",
+      "id": "TC-076",
       "category": "Security / output encoding",
       "name": "Stored form content is not executed on dashboard",
       "vector": "Stored HTML event-handler and script payload",
@@ -824,7 +846,7 @@
       "severity": ""
     },
     {
-      "id": "TC-075",
+      "id": "TC-077",
       "category": "Data handling",
       "name": "Unicode form data round-trips",
       "vector": "Devanagari, CJK, emoji, Arabic",
@@ -835,7 +857,7 @@
       "severity": ""
     },
     {
-      "id": "TC-076",
+      "id": "TC-078",
       "category": "Dashboard",
       "name": "Clear/reset removes isolated submissions",
       "vector": "POST /api/reset",

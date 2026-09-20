@@ -23,6 +23,8 @@ const INSTANT_SCORE_THRESHOLD = 0.5;
 const BEHAVIORAL_SCORE_THRESHOLD = 0.5;
 const MIN_INTERACTION_OBSERVATION_MS = 500;
 const MAX_SUBMIT_INTENT_AGE_MS = 5_000;
+const MIN_INJECTED_KEY_EVENTS = 5;
+const INJECTED_KEY_EVENT_RATIO = 0.6;
 const TRUST_EDGE_HEADERS = process.env.TRUST_EDGE_HEADERS === "1";
 const CONFIDENCE_LEVELS = new Set(["low", "medium", "high"]);
 const challenges = new Map();
@@ -391,6 +393,26 @@ function validateInteraction(interaction) {
     interaction.untrustedFormEvents > 0
   ) {
     reasons.push("untrusted form events were observed");
+  }
+
+  // Text pushed in with SendInput/KEYEVENTF_UNICODE arrives as a trusted keydown
+  // with no physical key behind it (empty code, VK_PACKET). Enforced here as well
+  // as in the browser layer so a tampered page bundle cannot drop the evidence.
+  const printableKeys = isNonNegativeInteger(interaction.printableKeyEvents)
+    ? interaction.printableKeyEvents
+    : 0;
+  const injectedKeys = isNonNegativeInteger(interaction.injectedKeyEvents)
+    ? interaction.injectedKeyEvents
+    : 0;
+  if (injectedKeys > printableKeys) {
+    reasons.push("keystroke counters were inconsistent");
+  } else if (
+    injectedKeys >= MIN_INJECTED_KEY_EVENTS &&
+    injectedKeys / Math.max(printableKeys, 1) >= INJECTED_KEY_EVENT_RATIO
+  ) {
+    reasons.push(
+      `form text was injected at the OS level (${injectedKeys}/${printableKeys} keystrokes had no physical key)`,
+    );
   }
 
   return reasons;

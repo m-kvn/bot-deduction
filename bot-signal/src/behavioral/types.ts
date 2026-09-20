@@ -49,6 +49,28 @@ export interface KeySample {
   isTrusted: boolean;
   /** `true` for auto-repeat while a key is held — excluded from typing-rhythm analysis */
   repeat?: boolean;
+  /**
+   * `KeyboardEvent.code` — the physical key. Empty for OS-level text injection
+   * (`SendInput` with `KEYEVENTF_UNICODE`), which has no key behind it.
+   */
+  code?: string;
+  /** `KeyboardEvent.keyCode`. `231` is `VK_PACKET`, i.e. an injected character. */
+  keyCode?: number;
+  /** `true` when the event produced a single printable character. */
+  printable?: boolean;
+  /** `KeyboardEvent.isComposing` — IME composition, which legitimately has no code. */
+  composing?: boolean;
+}
+
+export interface ButtonSample {
+  /** `"down"` or `"up"` for the primary pointer button. */
+  kind: "down" | "up";
+  x: number;
+  y: number;
+  screenX?: number;
+  screenY?: number;
+  t: number;
+  isTrusted: boolean;
 }
 
 export interface ClickSample {
@@ -90,6 +112,8 @@ export interface BehavioralSamples {
   clicks: ClickSample[];
   /** Touch activity — exempts tap-driven clicks from mouse-based signals */
   touches?: TouchSample[];
+  /** Primary-button press/release pairs — used to measure click-hold jitter. */
+  buttons?: ButtonSample[];
   observationMs: number;
 }
 

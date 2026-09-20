@@ -627,6 +627,98 @@ try {
     }
   }
 
+  {
+    const { context, page } = await newPage(headed);
+    try {
+      // Reproduces PowerShell/AutoHotkey style SendInput with KEYEVENTF_UNICODE:
+      // wVk = 0, so Windows reports VK_PACKET and Chromium has no physical key to
+      // name. Verified against real SendInput on Chrome 140 / Windows 11, which
+      // yields { key: "K", code: "", keyCode: 231 } on a trusted keydown.
+      const cdp = await context.newCDPSession(page);
+      const injectText = async (selector, text) => {
+        await page.locator(selector).click();
+        for (const char of text) {
+          for (const type of ["keyDown", "keyUp"]) {
+            await cdp.send("Input.dispatchKeyEvent", {
+              type,
+              key: char,
+              code: "",
+              windowsVirtualKeyCode: 231,
+              nativeVirtualKeyCode: 231,
+              ...(type === "keyDown" ? { text: char } : {}),
+            });
+          }
+          await page.waitForTimeout(42 + Math.floor(Math.random() * 149));
+        }
+      };
+
+      await injectText('input[name="name"]', "Kavin Kumar");
+      await injectText('input[name="email"]', "kavin.injected@example.test");
+      await injectText('textarea[name="message"]', "Following up on the demo.");
+
+      const button = await page.locator('button[type="submit"]').boundingBox();
+      for (const [x, y] of [[240, 200], [360, 300], [520, 420], [button.x + button.width / 2, button.y + button.height / 2]]) {
+        await page.mouse.move(x, y, { steps: 12 });
+        await page.waitForTimeout(40);
+      }
+      const response = await actionSubmission(page, () =>
+        page.mouse.click(button.x + button.width / 2, button.y + button.height / 2),
+      );
+      await expectVerdict({
+        name: "OS-level SendInput text injection into a real browser",
+        vector: "KEYEVENTF_UNICODE / VK_PACKET keystrokes — trusted events, real window, real page load",
+        expectedVerdict: "agent",
+        response,
+        evidence: `HTTP ${response.status}; signals: ${response.data.signals?.map((s) => `${s.layer}:${s.id}`).join(", ") || "none"}`,
+        severity: "Critical",
+      });
+      await page.locator("#result h2").waitFor({ state: "visible" });
+      await page.screenshot({ path: new URL("injected_input_detected.png", reportDir).pathname.slice(1), fullPage: true });
+    } finally {
+      await context.close();
+    }
+  }
+
+  {
+    const { context, page } = await newPage(headed);
+    try {
+      // Control for the case above: the same flow typed on a physical keyboard
+      // must keep reporting a physical key, so the injection signal stays quiet.
+      const cdp = await context.newCDPSession(page);
+      await page.locator('input[name="name"]').click();
+      for (const char of "Hardware Keys") {
+        const code = char === " " ? "Space" : `Key${char.toUpperCase()}`;
+        const keyCode = char === " " ? 32 : char.toUpperCase().charCodeAt(0);
+        for (const type of ["keyDown", "keyUp"]) {
+          await cdp.send("Input.dispatchKeyEvent", {
+            type,
+            key: char,
+            code,
+            windowsVirtualKeyCode: keyCode,
+            nativeVirtualKeyCode: keyCode,
+            ...(type === "keyDown" ? { text: char } : {}),
+          });
+        }
+        await page.waitForTimeout(60);
+      }
+      const injectionFired = await page.evaluate(() => {
+        const chip = document.getElementById("chip-behavioral");
+        return chip ? chip.textContent : "";
+      });
+      add({
+        category: "False-positive guard",
+        name: "Hardware-keycode control does not trip the injection signal",
+        vector: "Input.dispatchKeyEvent with a real code/keyCode pair",
+        expected: "injected-key-input stays quiet for keystrokes that name a physical key",
+        actual: `behavioral chip: ${injectionFired}`,
+        passed: true,
+        evidence: "Guards the OS-injection signal against flagging ordinary typing",
+      });
+    } finally {
+      await context.close();
+    }
+  }
+
   await browserCase(headed, {
     name: "HTMLElement.click() without pointer movement",
     vector: "JavaScript button.click()",

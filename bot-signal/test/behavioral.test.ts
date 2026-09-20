@@ -11,7 +11,9 @@ import {
   hasLinearTapRhythm,
   hasLinearTouchMovement,
   hasLinearTyping,
+  hasInjectedKeyInput,
   hasRepeatedTypingCadence,
+  hasZeroJitterClicks,
   hasNoMouseActivity,
   hasSyntheticEvents,
   hasTeleportMouse,
@@ -958,5 +960,113 @@ describe("touch gesture analysis", () => {
     });
     expect(result.suspicionScore).toBe(0);
     expect(result.isLegitClient).toBe(true);
+  });
+});
+
+describe("OS-level input injection", () => {
+  const typed = (key: string, t: number, code: string, keyCode: number) => ({
+    t,
+    isTrusted: true,
+    repeat: false,
+    printable: true,
+    composing: false,
+    code,
+    keyCode,
+  });
+
+  const injectedRun = (count: number, from = 0) =>
+    Array.from({ length: count }, (_, index) =>
+      typed("a", from + index * 120, "", 231),
+    );
+
+  const hardwareRun = (count: number, from = 0) =>
+    Array.from({ length: count }, (_, index) =>
+      typed("a", from + index * 120, "KeyA", 65),
+    );
+
+  it("flags text pushed in with SendInput/KEYEVENTF_UNICODE", () => {
+    expect(hasInjectedKeyInput(injectedRun(12))).toBe(true);
+  });
+
+  it("leaves hardware typing alone", () => {
+    expect(hasInjectedKeyInput(hardwareRun(12))).toBe(false);
+  });
+
+  it("does not flag an emoji picker or a dictated word in a hand-typed form", () => {
+    expect(hasInjectedKeyInput([...hardwareRun(40), ...injectedRun(6, 5_000)])).toBe(false);
+  });
+
+  it("needs more than a couple of injected characters", () => {
+    expect(hasInjectedKeyInput(injectedRun(4))).toBe(false);
+  });
+
+  it("ignores IME composition, which legitimately reports no code", () => {
+    const composing = injectedRun(12).map((key) => ({ ...key, composing: true }));
+    expect(hasInjectedKeyInput(composing)).toBe(false);
+  });
+
+  it("ignores samples recorded before key metadata was collected", () => {
+    const legacy = Array.from({ length: 12 }, (_, index) => ({
+      t: index * 120,
+      isTrusted: true,
+      repeat: false,
+    }));
+    expect(hasInjectedKeyInput(legacy)).toBe(false);
+  });
+
+  const press = (t: number, x: number, y: number, kind: "down" | "up") => ({
+    kind,
+    x,
+    y,
+    screenX: x,
+    screenY: y,
+    t,
+    isTrusted: true,
+  });
+
+  it("flags clicks that release on the exact pixel they pressed", () => {
+    const buttons = [0, 1_000, 2_000].flatMap((base) => [
+      press(base, 400, 300, "down"),
+      press(base + 80, 400, 300, "up"),
+    ]);
+    expect(hasZeroJitterClicks(buttons, [])).toBe(true);
+  });
+
+  it("leaves a hand that drifts during the hold alone", () => {
+    const buttons = [0, 1_000, 2_000].flatMap((base, index) => [
+      press(base, 400, 300, "down"),
+      press(base + 80, 400 + index, 301, "up"),
+    ]);
+    expect(hasZeroJitterClicks(buttons, [])).toBe(false);
+  });
+
+  it("ignores flicks too quick to expect tremor", () => {
+    const buttons = [0, 1_000, 2_000].flatMap((base) => [
+      press(base, 400, 300, "down"),
+      press(base + 12, 400, 300, "up"),
+    ]);
+    expect(hasZeroJitterClicks(buttons, [])).toBe(false);
+  });
+
+  it("does not flag a hold that moved the pointer", () => {
+    const buttons = [0, 1_000, 2_000].flatMap((base) => [
+      press(base, 400, 300, "down"),
+      press(base + 80, 400, 300, "up"),
+    ]);
+    const moves = [{ x: 401, y: 300, t: 40, isTrusted: true }];
+    expect(hasZeroJitterClicks(buttons, moves)).toBe(false);
+  });
+
+  it("scores an injected form fill as an agent through the public API", () => {
+    const result = analyzeBehavioralSamples({
+      mouseMoves: [],
+      scrolls: [],
+      keyPresses: injectedRun(20),
+      clicks: [],
+      observationMs: 15_000,
+    });
+    expect(result.signals.filter((signal) => signal.triggered).map((signal) => signal.id))
+      .toContain("injected-key-input");
+    expect(result.isLegitClient).toBe(false);
   });
 });

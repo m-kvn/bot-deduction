@@ -115,6 +115,7 @@ export type {
   BehavioralSignal,
   ClickSample,
   ConfidenceLevel,
+  ButtonSample,
   KeySample,
   MouseSample,
   ScrollSample,

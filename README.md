@@ -4,8 +4,9 @@ A self-hosted contact form that decides, per submission, whether it was filled i
 by an **agent / bot** — with no auth, no CAPTCHA, no third-party API and no outbound network calls at
 request time. Every signal is computed locally from the browser and from the HTTP request itself.
 
-Latest verified run: **76/76 harness tests pass**, and **62/62 agent-driven submissions are
-classified as AGENT (100%, 0 missed)**. Reports live in `Test_Report/`.
+Latest verified run: **78/78 harness tests pass**, and **63/63 agent-driven submissions are
+classified as AGENT (100%, 0 missed)** — including a real PowerShell `SendInput` session driving a
+live Chrome window. Reports live in `Test_Report/`.
 
 ---
 
@@ -17,7 +18,7 @@ classified as AGENT (100%, 0 missed)**. Reports live in `Test_Report/`.
 ├─ bot-signal/                      # the detection library + the demo app
 │  ├─ src/                          # instant, behavioral and server detectors (TypeScript)
 │  ├─ data/                         # offline IP lists (datacenter, AbuseIPDB, iCloud Relay)
-│  ├─ test/                         # 381 unit tests (vitest)
+│  ├─ test/                         # 392 unit tests (vitest)
 │  └─ examples/form-demo/
 │     ├─ server.mjs                 # the app: static pages + /api/challenge + /api/submit
 │     ├─ db.mjs                     # SQLite persistence (node:sqlite, no native deps)
@@ -25,7 +26,8 @@ classified as AGENT (100%, 0 missed)**. Reports live in `Test_Report/`.
 │     ├─ bots/                      # scripted + browser bot simulators
 │     └─ public/                    # index.html (form), dashboard.html, app.js, styles.css
 └─ Test_Report/
-   ├─ run_tests.mjs                 # 76-case end-to-end harness (Patchright + direct HTTP)
+   ├─ run_tests.mjs                 # 78-case end-to-end harness (Patchright + direct HTTP)
+   ├─ probe/                        # OS input-injection measurement + replay tooling
    ├─ generate_agent_detection_report.mjs
    ├─ results.json                  # raw results of the last run
    ├─ agent_detection_test_report.html / .pdf
@@ -231,7 +233,8 @@ an **agent** if any layer rejects it.
 1. **Instant (browser)** — headless markers, `navigator.webdriver`, automation globals (Playwright,
    Puppeteer, Selenium, CDP), implausible screen geometry, tampered navigator getters.
 2. **Behavioral (browser)** — mouse / scroll / key / touch cadence, synthetic-event counts, linear or
-   teleporting pointer paths, uniform and repeated-cadence typing.
+   teleporting pointer paths, uniform and repeated-cadence typing, and **OS-level input injection**
+   (see below).
 3. **Server (request)** — datacenter / AbuseIPDB / iCloud-Relay IP ranges, UA vs. `sec-ch-ua`
    consistency, Fetch Metadata, `Accept-Language` vs. GeoIP, optional JA3/JA4.
 
@@ -245,10 +248,40 @@ On top of those, the demo server refuses anything that did not come from a real 
   Metadata — a direct HTTP client that copies browser headers still leaves no page-load trail;
 - **trusted** form input and submit intent (`event.isTrusted`), with no untrusted form events.
 
-**Honest limitation:** this raises the cost of forgery, it does not make it impossible. A script that
-fully replays a page load — cookie jar, every subresource, correct Fetch Metadata, realistic timing —
-can still get through. That is inherent to client-side signals without auth or a third-party service.
-Treat the verdict as a risk signal, not as proof of human identity.
+### OS-level input injection
+
+A harness that drives a real, signed-in browser through the Windows input stack (`SendInput`,
+`keybd_event`, `mouse_event`, `SetCursorPos` — the PowerShell and AutoHotkey approach) produces
+events that are genuinely `isTrusted`. The window is real, the page load is real, and every
+provenance check above passes, so this used to come back HUMAN with score 0.00.
+
+The tell is how the text is pushed in. `SendInput` with `KEYEVENTF_UNICODE` sets `wVk = 0` and carries
+the character in the scan-code field, so Windows reports `VK_PACKET` and Chromium has no physical key
+to name. Measured against Chrome 140 on Windows 11:
+
+| Input method | `key` | `code` | `keyCode` | `isTrusted` |
+|---|---|---|---|---|
+| `SendInput` + `KEYEVENTF_UNICODE` | `K` | *(empty)* | `231` (`VK_PACKET`) | `true` |
+| Scan-code key press (hardware path) | `b` | `KeyB` | `66` | `true` |
+
+`injected-key-input` fires when at least 5 printable keystrokes — and at least 60% of them — arrive
+with no physical key behind them. It is a ratio so that an emoji picker or a dictated word inside an
+otherwise hand-typed form is not flagged, and the server enforces the same rule on the submitted
+interaction record so a tampered page bundle cannot drop the evidence.
+`zero-jitter-clicks` supports it: `mouse_event` releases on the exact pixel it pressed, while a hand
+resting on a mouse drifts. It is weighted as supporting evidence only and never decides a verdict
+alone.
+
+`Test_Report/probe/` holds the tooling: `probe.mjs` measures what Chromium reports for injected vs.
+hardware keystrokes, and `verify_real_injection.mjs` replays a full PowerShell injection run against a
+live server. Both take over the mouse and keyboard while they run.
+
+**Honest limitation:** this raises the cost of forgery, it does not make it impossible. Two routes
+stay open by construction. A script that fully replays a page load — cookie jar, every subresource,
+correct Fetch Metadata, realistic timing — satisfies the provenance layer, because that layer
+verifies a trail and not a person. And an injector that sends real virtual-key/scan-code pairs instead
+of Unicode packets produces keystrokes a browser cannot tell from hardware; only the pointer-level
+heuristics remain against it. Treat the verdict as a risk signal, not as proof of human identity.
 
 ---
 
@@ -256,12 +289,12 @@ Treat the verdict as a risk signal, not as proof of human identity.
 
 ```bash
 cd bot-signal
-npm test                                   # 381 unit tests
+npm test                                   # 392 unit tests
 node examples/form-demo/crosscheck.mjs     # 30 server-detection cases
 
 npx patchright install chromium            # once, for the browser harness
 cd ../Test_Report
-node run_tests.mjs                         # 76 end-to-end cases -> results.json
+node run_tests.mjs                         # 78 end-to-end cases -> results.json
 node generate_agent_detection_report.mjs   # -> HTML + PDF report
 ```
 

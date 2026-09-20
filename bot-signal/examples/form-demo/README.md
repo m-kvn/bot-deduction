@@ -16,7 +16,10 @@ The demo also requires both browser layers, a one-time server challenge, same-or
 `Referer` request provenance, a cookie-bound page-load session whose document and every subresource
 (`styles.css`, `bot-signal.global.js`, `app.js`) were actually fetched with the matching Fetch
 Metadata, and credible trusted form input plus submit intent. A direct HTTP client that copies
-browser headers still leaves no page-load trail, so `client:invalid-page-session` fires. These checks
+browser headers still leaves no page-load trail, so `client:invalid-page-session` fires. Text pushed
+in at the OS level with `SendInput`/`KEYEVENTF_UNICODE` arrives as a trusted keydown with no physical
+key behind it (empty `code`, `keyCode` 231), which the browser layer reports as
+`injected-key-input` and the server re-checks on the submitted interaction record. These checks
 raise the cost of posting fabricated client results, but the
 browser remains an attacker-controlled environment: use the verdict as a risk signal, not proof of
 human identity.

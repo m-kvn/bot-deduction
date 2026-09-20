@@ -1,6 +1,7 @@
 import { analyzeBehavioralSamples } from "./scoring.js";
 import type {
   BehavioralClientDetector,
+  ButtonSample,
   BehavioralClientResult,
   BehavioralDetectorOptions,
   BehavioralSamples,
@@ -41,6 +42,7 @@ function createEmptySamples(observationMs = 0): Required<BehavioralSamples> {
     keyPresses: [],
     clicks: [],
     touches: [],
+    buttons: [],
     observationMs,
   };
 }
@@ -86,6 +88,7 @@ export function createBehavioralClientDetector(
     pruneStream(samples.keyPresses, cutoff);
     pruneStream(samples.clicks, cutoff);
     pruneStream(samples.touches, cutoff);
+    pruneStream(samples.buttons, cutoff);
   };
 
   const record = <T extends { t: number }>(stream: T[], sample: T): void => {
@@ -156,7 +159,36 @@ export function createBehavioralClientDetector(
       t: Date.now(),
       isTrusted: keyboardEvent.isTrusted,
       repeat: keyboardEvent.repeat,
+      code: keyboardEvent.code,
+      keyCode: keyboardEvent.keyCode,
+      printable: typeof keyboardEvent.key === "string" && [...keyboardEvent.key].length === 1,
+      composing: keyboardEvent.isComposing,
     });
+  };
+
+  const recordButton = (event: Event, kind: "down" | "up"): void => {
+    const mouseEvent = event as MouseEvent;
+    if (mouseEvent.button !== 0) {
+      return;
+    }
+
+    record<ButtonSample>(samples.buttons, {
+      kind,
+      x: mouseEvent.clientX,
+      y: mouseEvent.clientY,
+      screenX: mouseEvent.screenX,
+      screenY: mouseEvent.screenY,
+      t: Date.now(),
+      isTrusted: mouseEvent.isTrusted,
+    });
+  };
+
+  const onMouseDown = (event: Event): void => {
+    recordButton(event, "down");
+  };
+
+  const onMouseUp = (event: Event): void => {
+    recordButton(event, "up");
   };
 
   const onClick = (event: Event): void => {
@@ -215,6 +247,8 @@ export function createBehavioralClientDetector(
     addListener(context, "wheel", onWheel);
     addListener(context, "keydown", onKeyDown);
     addListener(context, "click", onClick);
+    addListener(context, "mousedown", onMouseDown);
+    addListener(context, "mouseup", onMouseUp);
     addListener(context, "touchstart", onTouchStart);
     addListener(context, "touchmove", onTouchMove);
 
@@ -315,7 +349,9 @@ export {
   hasLinearTapRhythm,
   hasLinearTouchMovement,
   hasLinearTyping,
+  hasInjectedKeyInput,
   hasRepeatedTypingCadence,
+  hasZeroJitterClicks,
   hasNoMouseActivity,
   hasSyntheticEvents,
   hasTeleportMouse,
