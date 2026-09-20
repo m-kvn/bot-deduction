@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head><title>BSCOALESCE-WINDOW</title></head>
+  <body style="margin:0;height:100vh;background:#111;color:#eee;font:14px monospace">
+    <pre id="out">move the pointer over this window</pre>
+    <script>
+      window.__c = [];
+      window.__raw = [];
+      addEventListener(
+        "pointermove",
+        function (e) {
+          if (e.pointerType !== "mouse") return;
+          var coalesced = typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [];
+          window.__c.push(coalesced.length);
+          for (var i = 0; i < coalesced.length; i += 1) window.__raw.push(coalesced[i].timeStamp);
+          document.documentElement.dataset.c = window.__c.join(",");
+          document.documentElement.dataset.raw = window.__raw.join(",");
+          document.getElementById("out").textContent =
+            "pointermove: " + window.__c.length + "   raw: " + window.__raw.length;
+        },
+        true,
+      );
+    </script>
+  </body>
+</html>

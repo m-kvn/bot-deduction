@@ -4,7 +4,7 @@ A self-hosted contact form that decides, per submission, whether it was filled i
 by an **agent / bot** — with no auth, no CAPTCHA, no third-party API and no outbound network calls at
 request time. Every signal is computed locally from the browser and from the HTTP request itself.
 
-Latest verified run: **81/81 harness tests pass**, and **66/66 agent-driven submissions in that
+Latest verified run: **82/82 harness tests pass**, and **66/66 agent-driven submissions in that
 matrix are classified as AGENT** — including a real PowerShell `SendInput` session driving a live
 Chrome window. That is a rate over the attacks in the matrix, not a claim of completeness: an
 independent red team passed four methods it does not contain (see **Known-open vectors** below).
@@ -28,7 +28,7 @@ Reports live in `Test_Report/`.
 │     ├─ bots/                      # scripted + browser bot simulators
 │     └─ public/                    # index.html (form), dashboard.html, app.js, styles.css
 └─ Test_Report/
-   ├─ run_tests.mjs                 # 81-case end-to-end harness (Patchright + direct HTTP)
+   ├─ run_tests.mjs                 # 82-case end-to-end harness (Patchright + direct HTTP)
    ├─ probe/                        # OS input-injection measurement + replay tooling
    ├─ generate_agent_detection_report.mjs
    ├─ results.json                  # raw results of the last run
@@ -299,16 +299,45 @@ buried:
 | OS-level injection with real **scan codes** (`SendInput` + `KEYEVENTF_SCANCODE`, patched pyautogui) | The key event is identical to hardware. `injected-key-input` is, in effect, a scan-code check: it catches `KEYEVENTF_UNICODE` and stock pyautogui, which send scan code 0, and nothing else. |
 | Raw **CDP `Input`** client driving a normal Chrome build | No `navigator.webdriver`, no automation launcher, genuinely trusted events. The library's console-based CDP probe does not fire for an attached `Input`-domain session, with or without `Runtime.enable`. |
 
-A timing-based fix for the CDP case was measured and **rejected**: the hypothesis was that
-CDP-injected pointer input would bypass Chromium's rAF-aligned input pipeline. It does not — median
-inter-event gap 16.9 ms for CDP against 16.8 ms for real OS input, zero sub-frame gaps in either
-(`Test_Report/probe/cdp_timing_probe.mjs`). Nothing was shipped for it, because nothing worked.
+Three detection hypotheses were measured and **all three rejected**. Recorded so they do not get
+proposed again:
+
+| Hypothesis | Measurement | Result |
+|---|---|---|
+| CDP input skips Chromium's rAF-aligned input pipeline | median inter-event gap 16.9 ms (CDP) vs 16.8 ms (real OS input), zero sub-frame gaps in either | rejected — same pipeline |
+| Injected input produces fewer coalesced raw events than a polled mouse | 1.01 coalesced/`pointermove` for both `SetCursorPos` and CDP; and any cadence rule is trivially matched once known | rejected — no baseline, self-defeating |
+| CDP can drive an unfocused window, a human cannot | `document.hasFocus()` stayed `true` under CDP input with the OS window inactive | rejected — not observable |
+
+Probes: `Test_Report/probe/cdp_timing_probe.mjs`, `coalesced_probe.mjs`, `focus_probe.mjs`.
 
 **Honest limitation:** this raises the cost of forgery; it does not make it impossible. Both open
 vectors produce genuinely trusted events, a real page load and human-grade input, so the samples the
-server recomputes are honest samples of real input. There is no client-side signal left to add. The
-remaining lever is server-side cost — per-session and per-IP rate limits, a review queue above a risk
-threshold, and treating the verdict as one input to that decision rather than the decision itself.
+server recomputes are honest samples of real input. Detection has no client-side signal left to add.
+
+### Volume and repetition controls
+
+What those vectors cannot hide is repetition: a hand fills this form once, a loop fills it all
+afternoon. The server therefore tracks a second axis, kept deliberately separate from the verdict —
+`verdict` stays a statement about one submission, `outcome` is what to do about it.
+
+| Response field | Values |
+|---|---|
+| `verdict` | `human` / `agent` — detection only, unchanged by anything below |
+| `outcome` | `accepted` (HTTP 200) · `review` (HTTP 202) · `rejected` (HTTP 403, verdict `agent`) |
+| `risk` | the reasons a clean-looking submission was sent to review |
+
+| Limit | Env var | Default |
+|---|---|---|
+| Submissions per page load | `MAX_SUBMISSIONS_PER_SESSION` | 3 |
+| Submissions per IP per window | `MAX_SUBMISSIONS_PER_IP` | 10 |
+| Page loads per IP per window | `MAX_SESSIONS_PER_IP` | 12 |
+| Challenges per page load | `MAX_CHALLENGES_PER_SESSION` | 24 |
+| Identical form content per IP | `MAX_IDENTICAL_SUBMISSIONS` | 1 |
+| Rolling window | `RISK_WINDOW_MS` | 600000 |
+
+Verified against the scan-code injection that defeats detection: first run `human` / `accepted`,
+second run with the same content `human` / **`review`**. The verdict stays honest; the submission
+stops being silently accepted.
 
 ---
 
@@ -321,7 +350,7 @@ node examples/form-demo/crosscheck.mjs     # 30 server-detection cases
 
 npx patchright install chromium            # once, for the browser harness
 cd ../Test_Report
-node run_tests.mjs                         # 81 end-to-end cases -> results.json
+node run_tests.mjs                         # 82 end-to-end cases -> results.json
 node generate_agent_detection_report.mjs   # -> HTML + PDF report
 ```
 

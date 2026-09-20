@@ -45,6 +45,21 @@ const OBSERVATION_SLACK_MS = 2_000;
 // How far the page's own behavioral score may sit from the server's recomputation
 // before the difference reads as tampering rather than rounding.
 const SCORE_MISMATCH_TOLERANCE = 0.05;
+
+// Volume controls. OS-level input injection with real scan codes, and a raw CDP
+// Input client driving a normal browser, both produce input a page cannot tell
+// from a person's — see README "Known-open vectors". What they cannot hide is
+// repetition: a hand fills this form once, a loop fills it all afternoon. These
+// do not classify a single submission and deliberately never touch the verdict;
+// they mark a clean-looking submission for review instead of silently accepting it.
+const RISK_WINDOW_MS = Number(process.env.RISK_WINDOW_MS ?? 10 * 60_000);
+const MAX_SUBMISSIONS_PER_SESSION = Number(process.env.MAX_SUBMISSIONS_PER_SESSION ?? 3);
+const MAX_SUBMISSIONS_PER_IP = Number(process.env.MAX_SUBMISSIONS_PER_IP ?? 10);
+const MAX_SESSIONS_PER_IP = Number(process.env.MAX_SESSIONS_PER_IP ?? 12);
+const MAX_CHALLENGES_PER_SESSION = Number(process.env.MAX_CHALLENGES_PER_SESSION ?? 24);
+const MAX_IDENTICAL_SUBMISSIONS = Number(process.env.MAX_IDENTICAL_SUBMISSIONS ?? 1);
+const MAX_RISK_KEYS = 10_000;
+const ipActivity = new Map();
 const TRUST_EDGE_HEADERS = process.env.TRUST_EDGE_HEADERS === "1";
 const CONFIDENCE_LEVELS = new Set(["low", "medium", "high"]);
 const challenges = new Map();
@@ -169,6 +184,7 @@ function startPageSession(req, res, documentPath) {
   }
   const id = randomUUID();
   const now = Date.now();
+  ipRecord(clientIp(req), now).sessions += 1;
   pageSessions.set(id, {
     documentPath,
     startedAt: now,
@@ -570,6 +586,67 @@ function compareClaimedBehavioral(claimed, recomputed) {
   return reasons;
 }
 
+function ipRecord(ip, now = Date.now()) {
+  for (const [key, record] of ipActivity) {
+    if (record.lastSeen + RISK_WINDOW_MS <= now) ipActivity.delete(key);
+  }
+  while (ipActivity.size >= MAX_RISK_KEYS) {
+    ipActivity.delete(ipActivity.keys().next().value);
+  }
+
+  let record = ipActivity.get(ip);
+  if (!record || record.startedAt + RISK_WINDOW_MS <= now) {
+    record = { startedAt: now, submissions: 0, sessions: 0, forms: new Map() };
+    ipActivity.set(ip, record);
+  }
+  record.lastSeen = now;
+  return record;
+}
+
+function formDigest(form) {
+  return JSON.stringify([form.name, form.email, form.company, form.message]);
+}
+
+/**
+ * Repetition the input itself cannot hide. Returns reasons, never signals: the
+ * verdict stays a statement about one submission, and volume is a separate axis.
+ */
+function assessRisk(req, form, pageSession) {
+  const ip = clientIp(req);
+  const record = ipRecord(ip);
+  const reasons = [];
+
+  record.submissions += 1;
+  if (record.submissions > MAX_SUBMISSIONS_PER_IP) {
+    reasons.push(
+      `${record.submissions} submissions from this address in ${Math.round(RISK_WINDOW_MS / 60_000)} minutes`,
+    );
+  }
+
+  const digest = formDigest(form);
+  const repeats = (record.forms.get(digest) ?? 0) + 1;
+  record.forms.set(digest, repeats);
+  if (repeats > MAX_IDENTICAL_SUBMISSIONS) {
+    reasons.push(`identical form content submitted ${repeats} times from this address`);
+  }
+
+  if (record.sessions > MAX_SESSIONS_PER_IP) {
+    reasons.push(`${record.sessions} page loads from this address in the same window`);
+  }
+
+  if (pageSession) {
+    pageSession.submissions = (pageSession.submissions ?? 0) + 1;
+    if (pageSession.submissions > MAX_SUBMISSIONS_PER_SESSION) {
+      reasons.push(`${pageSession.submissions} submissions from a single page load`);
+    }
+    if ((pageSession.challenges ?? 0) > MAX_CHALLENGES_PER_SESSION) {
+      reasons.push(`${pageSession.challenges} challenges taken by a single page load`);
+    }
+  }
+
+  return reasons;
+}
+
 function pruneChallenges(now = Date.now()) {
   for (const [token, challenge] of challenges) {
     if (challenge.expiresAt <= now) challenges.delete(token);
@@ -583,6 +660,10 @@ function createChallenge(req) {
   }
   const token = randomUUID();
   const now = Date.now();
+  const issuingSession = currentPageSession(req).session;
+  if (issuingSession) {
+    issuingSession.challenges = (issuingSession.challenges ?? 0) + 1;
+  }
   challenges.set(token, {
     expiresAt: now + CHALLENGE_TTL_MS,
     ip: clientIp(req),
@@ -698,7 +779,19 @@ async function handleSubmit(req, res) {
   const recomputed = samples
     ? analyzeBehavioralSamples(samples, BEHAVIORAL_SCORE_THRESHOLD)
     : null;
-  const behavioral = recomputed ?? claimedBehavioral;
+  // Same shape the page reports — triggered signals only — so the recomputed
+  // layer goes through exactly the same validation as a claimed one instead of
+  // failing it on the untriggered entries a full analysis carries.
+  const behavioral = recomputed
+    ? {
+        suspicionScore: recomputed.suspicionScore,
+        isLegitClient: recomputed.isLegitClient,
+        confidence: recomputed.confidence,
+        sampleCounts: recomputed.sampleCounts,
+        observationMs: recomputed.observationMs,
+        signals: recomputed.signals.filter((signal) => signal.triggered),
+      }
+    : claimedBehavioral;
   const claimMismatchReasons = recomputed
     ? compareClaimedBehavioral(claimedBehavioral, recomputed)
     : [];
@@ -910,10 +1003,20 @@ async function handleSubmit(req, res) {
     notes: advisoryNotes.map((signal) => signal.id),
   };
 
+  // Deliberately after the verdict and never folded into it: `verdict` stays a
+  // statement about this one submission, `outcome` is what to do about it.
+  const riskReasons = assessRisk(req, form, pageSession);
+  const outcome = isAgent ? "rejected" : riskReasons.length > 0 ? "review" : "accepted";
+  record.outcome = outcome;
+  record.risk = riskReasons;
+
   insertSubmission(record);
 
-  sendJson(res, isAgent ? 403 : 200, {
-    accepted: !isAgent,
+  const status = outcome === "rejected" ? 403 : outcome === "review" ? 202 : 200;
+  sendJson(res, status, {
+    accepted: outcome === "accepted",
+    outcome,
+    risk: riskReasons,
     verdict: record.verdict,
     score: record.score,
     automationKind: record.automationKind,

@@ -1,0 +1,21 @@
+<!doctype html><html><head><title>BSFOCUS-WINDOW</title></head>
+<body style="margin:0;height:100vh;background:#111;color:#eee;font:14px monospace">
+<input id="f" style="width:400px;font-size:20px" autofocus>
+<pre id="out">ready</pre>
+<script>
+window.__log = [];
+function rec(kind, e) {
+  window.__log.push({
+    kind: kind,
+    isTrusted: e.isTrusted,
+    hasFocus: document.hasFocus(),
+    visibility: document.visibilityState,
+    activation: navigator.userActivation ? navigator.userActivation.isActive : null
+  });
+  document.documentElement.dataset.log = JSON.stringify(window.__log);
+  document.getElementById('out').textContent = 'events: ' + window.__log.length;
+}
+addEventListener('keydown', function (e) { rec('keydown', e); }, true);
+addEventListener('pointermove', function (e) { rec('pointermove', e); }, true);
+document.getElementById('f').focus();
+</script></body></html>

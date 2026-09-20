@@ -792,6 +792,30 @@ try {
         evidence: `HTTP ${response.status}; browser chips: ${await page.locator("#live").innerText()}`,
         severity: "High",
       });
+      // The server recomputes the behavioral layer from the submitted samples.
+      // These four gates exist to catch a client that fakes or withholds that
+      // evidence, so a genuine page session carrying real samples must never trip
+      // them. Without this guard the whole suite stays green while every honest
+      // submission is flagged, because every case here expects AGENT anyway.
+      const plumbingSignals = new Set(
+        (response.data.signals ?? []).map((signal) => `${signal.layer}:${signal.id}`),
+      );
+      const wrongly = [
+        "client:invalid-client-layer",
+        "client:forged-client-verdict",
+        "client:missing-behavioral-samples",
+        "client:impossible-observation-window",
+      ].filter((id) => plumbingSignals.has(id));
+      add({
+        category: "False-positive guard",
+        name: "Server-side recomputation does not flag a genuine page session",
+        vector: "Real page load, real input, samples recomputed server-side",
+        expected: "no sample-integrity signal fires on honest evidence",
+        actual: wrongly.length === 0 ? "none fired" : `fired: ${wrongly.join(", ")}`,
+        passed: wrongly.length === 0,
+        evidence: `Signals seen: ${[...plumbingSignals].join(", ") || "none"}`,
+        severity: "Critical",
+      });
       await page.locator("#result h2").waitFor({ state: "visible" });
       await page.screenshot({ path: new URL("human_control.png", reportDir).pathname.slice(1), fullPage: true });
     } finally {

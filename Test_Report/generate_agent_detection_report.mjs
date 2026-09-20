@@ -322,10 +322,13 @@ const html = `<!doctype html>
         <td><strong>The CDP console probe never fires</strong> for an attached <code>Input</code>-domain
         client, even with <code>Runtime.enable</code>.</td>
         <td>Confirmed, open</td>
-        <td>Reproduced, and a proposed timing fix was measured and <em>rejected</em>: the hypothesis was
-        that CDP-injected pointer input would skip Chromium's rAF-aligned input pipeline. It does not.
-        Median inter-event gap was 16.9 ms for CDP versus 16.8 ms for real OS input, with zero
-        sub-frame gaps in either. No discriminator was shipped, because none was found.</td>
+        <td>Reproduced. Three candidate discriminators were measured and <em>all three rejected</em>:
+        (1) CDP input skipping Chromium's rAF-aligned pipeline — it does not, 16.9 ms median gap versus
+        16.8 ms for real OS input, zero sub-frame gaps in either; (2) fewer coalesced raw events than a
+        polled mouse — 1.01 per <code>pointermove</code> for both injected paths, and any cadence rule is
+        trivially matched once known; (3) CDP driving an unfocused window —
+        <code>document.hasFocus()</code> stays <code>true</code>. No discriminator was shipped, because
+        none survived measurement.</td>
       </tr>
       <tr>
         <td><strong><code>injected-key-input</code> is effectively a scan-code check</strong> — it
@@ -344,14 +347,39 @@ const html = `<!doctype html>
       </tr>
     </tbody>
   </table>
-  <p><strong>What remains open.</strong> Four of the six passing methods are unaddressed, and two of
-  them cannot be closed from inside the browser: OS-level injection with real scan codes
-  (PowerShell <code>SendInput</code>, patched pyautogui) and a raw CDP <code>Input</code> client
-  driving a normal Chrome build. Both produce genuinely trusted events, a real page load and
-  human-grade input; the samples the server now recomputes are honest samples of real input. The
-  remaining lever is not another client signal — it is server-side cost: per-session and per-IP rate
-  limits, a review queue for anything above a risk threshold, and treating the verdict as one input to
-  that decision rather than the decision.</p>
+  <p><strong>What remains undetectable.</strong> Four of the six passing methods are still classified
+  HUMAN, and this is architectural rather than an unfinished heuristic: OS-level injection with real
+  scan codes (PowerShell <code>SendInput</code>, patched pyautogui) and a raw CDP <code>Input</code>
+  client driving a normal Chrome build both produce genuinely trusted events, a real page load and
+  human-grade input. The samples the server now recomputes are honest samples of real input. There is
+  no client-side signal left to add.</p>
+
+  <h3>Volume and repetition controls</h3>
+  <p>What those vectors cannot hide is repetition — a hand fills this form once, a loop fills it all
+  afternoon. The server now tracks that as a second axis, kept deliberately out of the verdict:
+  <code>verdict</code> remains a statement about one submission, <code>outcome</code> is what to do
+  about it. A clean-looking submission from an address that has already sent the same content, or too
+  many submissions, or opened too many page sessions, returns <code>outcome: "review"</code> and
+  HTTP 202 instead of being silently accepted. Limits are environment-tunable
+  (<code>MAX_SUBMISSIONS_PER_SESSION</code>, <code>MAX_SUBMISSIONS_PER_IP</code>,
+  <code>MAX_SESSIONS_PER_IP</code>, <code>MAX_CHALLENGES_PER_SESSION</code>,
+  <code>MAX_IDENTICAL_SUBMISSIONS</code>, <code>RISK_WINDOW_MS</code>).</p>
+  <p>Verified against the scan-code injection that defeats detection outright: the first run scored
+  <code>human</code> / <code>accepted</code>, and the second run with the same content scored
+  <code>human</code> / <code>review</code>. The verdict stayed honest; the submission stopped being
+  accepted in silence. This is mitigation, not detection, and is reported as such.</p>
+
+  <div class="finding">
+    <h3>A bug this suite could not see</h3>
+    <p>Routing the recomputed behavioral layer through the existing client-layer validation made
+    <code>invalid-client-layer</code> fire on <em>every</em> samples-backed submission, including
+    honest ones — the validator requires <code>triggered === true</code> on each signal, and a full
+    analysis carries untriggered entries too. All 81 tests stayed green, because every case in this
+    matrix expects AGENT, so a verdict that was right for the wrong reason was indistinguishable from
+    one that was right. It surfaced only when a real scan-code injection run came back AGENT on a
+    signal it had no business tripping. A false-positive guard now asserts that a genuine page session
+    carrying real samples trips none of the four sample-integrity gates.</p>
+  </div>
 
   <h2>11. Scope note</h2>
   <p>This is a risk-based set of ${detectionCases.length} classification scenarios covering the app's documented layers and the requested Chrome/DOM/JavaScript/request techniques. “All possible” browser and network combinations are not finite; the report does not certify every OS, browser version, mobile device, assistive technology, extension, proxy or TLS terminator.</p>
