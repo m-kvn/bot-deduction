@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { detectServerClientAsync, preloadIpLists } from "../../dist/server.js";
 import { analyzeBehavioralSamples } from "../../dist/index.js";
 import {
@@ -46,6 +46,23 @@ const OBSERVATION_SLACK_MS = 2_000;
 // epoch milliseconds. A stream authored from scratch tends to start near zero
 // because it was generated relative to itself.
 const MIN_EPOCH_MS = 1_600_000_000_000;
+
+// Proof of work. One submission costs a person a fraction of a second; a client
+// running the form in a loop pays it again on every request and cannot amortise
+// it, so the difficulty rises with how much that address has already sent.
+const POW_BASE_DIFFICULTY = Number(process.env.POW_BASE_DIFFICULTY ?? 16);
+const POW_MAX_DIFFICULTY = Number(process.env.POW_MAX_DIFFICULTY ?? 22);
+const POW_ESCALATION_BITS = Number(process.env.POW_ESCALATION_BITS ?? 2);
+
+// Telemetry beacons. The point is not what the beacon says — it is that the
+// server watches it arrive, on the server's own clock. A payload claiming thirty
+// seconds of interaction has to be accompanied by thirty seconds of the session
+// actually existing and reporting, rather than being authored in one go and slept
+// in front of.
+const TELEMETRY_INTERVAL_MS = Number(process.env.TELEMETRY_INTERVAL_MS ?? 2_000);
+const MAX_TELEMETRY_BEACONS = 400;
+const TELEMETRY_STALE_MS = Number(process.env.TELEMETRY_STALE_MS ?? 20_000);
+const TELEMETRY_COVERAGE = Number(process.env.TELEMETRY_COVERAGE ?? 0.5);
 
 // How far the page's own behavioral score may sit from the server's recomputation
 // before the difference reads as tampering rather than rounding.
@@ -199,6 +216,8 @@ function startPageSession(req, res, documentPath) {
     navigated:
       header(req, "sec-fetch-mode") === "navigate" && header(req, "sec-fetch-dest") === "document",
     assets: new Map(),
+    beacons: [],
+    telemetryNonce: randomUUID(),
   });
   res.setHeader(
     "set-cookie",
@@ -459,6 +478,37 @@ function validateInteraction(interaction) {
   return reasons;
 }
 
+function leadingZeroBits(buffer) {
+  let bits = 0;
+  for (const byte of buffer) {
+    if (byte === 0) {
+      bits += 8;
+      continue;
+    }
+    bits += Math.clz32(byte) - 24;
+    break;
+  }
+  return bits;
+}
+
+// Everyone pays the base cost, which is a tenth of a second. Escalation starts
+// only past the point the volume controls already consider abusive, so a shared
+// office address does not get progressively punished for being busy.
+function powDifficultyFor(ip) {
+  const record = ipActivity.get(ip);
+  const sent = record?.submissions ?? 0;
+  const excess = Math.max(0, sent - MAX_SUBMISSIONS_PER_IP);
+  return Math.min(POW_MAX_DIFFICULTY, POW_BASE_DIFFICULTY + excess * POW_ESCALATION_BITS);
+}
+
+function verifyProofOfWork(challenge, nonce) {
+  if (!challenge || typeof nonce !== "string" || nonce.length > 64) {
+    return false;
+  }
+  const digest = createHash("sha256").update(`${challenge.powPrefix}:${nonce}`).digest();
+  return leadingZeroBits(digest) >= challenge.powDifficulty;
+}
+
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -669,13 +719,21 @@ function createChallenge(req) {
   if (issuingSession) {
     issuingSession.challenges = (issuingSession.challenges ?? 0) + 1;
   }
+  const powPrefix = randomUUID();
+  const powDifficulty = powDifficultyFor(clientIp(req));
   challenges.set(token, {
     expiresAt: now + CHALLENGE_TTL_MS,
     ip: clientIp(req),
     userAgent: header(req, "user-agent") ?? "",
     pageSessionId: currentPageSession(req).session ? currentPageSession(req).id : null,
+    powPrefix,
+    powDifficulty,
   });
-  return { token, expiresAt: new Date(now + CHALLENGE_TTL_MS).toISOString() };
+  return {
+    token,
+    expiresAt: new Date(now + CHALLENGE_TTL_MS).toISOString(),
+    pow: { prefix: powPrefix, difficulty: powDifficulty },
+  };
 }
 
 function consumeChallenge(req, token) {
@@ -689,7 +747,110 @@ function consumeChallenge(req, token) {
       challenge.ip === clientIp(req) &&
       challenge.userAgent === (header(req, "user-agent") ?? ""),
   );
-  return { valid, pageSessionId: valid ? (challenge.pageSessionId ?? null) : null };
+  return {
+    valid,
+    pageSessionId: valid ? (challenge.pageSessionId ?? null) : null,
+    record: valid ? challenge : null,
+  };
+}
+
+/**
+ * Records one telemetry beacon against the page session.
+ *
+ * Each reply carries the nonce the next beacon must quote, so the stream is a
+ * chain rather than a set of independent posts, and every link is timestamped by
+ * the server as it arrives. What matters is not the contents — a client can lie
+ * about those — but that the session was demonstrably alive and reporting across
+ * the window it later claims to have observed.
+ */
+async function handleTelemetry(req, res) {
+  let payload;
+  try {
+    payload = await readJsonBody(req);
+  } catch {
+    return sendJson(res, 400, { error: "invalid JSON body" });
+  }
+
+  const { session } = currentPageSession(req);
+  if (!session) {
+    return sendJson(res, 403, { error: "no page session" });
+  }
+  if (session.ip !== clientIp(req)) {
+    return sendJson(res, 403, { error: "page session belongs to another address" });
+  }
+  // A beacon with no nonce is the opening handshake: hand out the first link of
+  // the chain without recording anything.
+  if (payload?.nonce === null || payload?.nonce === undefined) {
+    return sendJson(res, 200, {
+      nonce: session.telemetryNonce,
+      intervalMs: TELEMETRY_INTERVAL_MS,
+    });
+  }
+  if (payload.nonce !== session.telemetryNonce) {
+    return sendJson(res, 409, { error: "stale telemetry nonce", nonce: session.telemetryNonce });
+  }
+  if (session.beacons.length >= MAX_TELEMETRY_BEACONS) {
+    return sendJson(res, 429, { error: "too many beacons" });
+  }
+
+  const now = Date.now();
+  const previous = session.beacons[session.beacons.length - 1];
+  if (previous && now - previous.serverAt < TELEMETRY_INTERVAL_MS * 0.5) {
+    return sendJson(res, 429, { error: "beacon too soon" });
+  }
+
+  session.beacons.push({
+    serverAt: now,
+    events: isNonNegativeInteger(payload?.events) ? payload.events : 0,
+    lastT: finiteNumber(payload?.lastT),
+  });
+  session.telemetryNonce = randomUUID();
+
+  return sendJson(res, 200, { nonce: session.telemetryNonce, intervalMs: TELEMETRY_INTERVAL_MS });
+}
+
+/**
+ * Checks the claimed observation window against the stretch of time the server
+ * actually watched this session report for. Authoring a long history offline and
+ * sleeping in front of it satisfies the duration check but leaves no beacons.
+ */
+function validateTelemetryStream(session, claimedObservationMs) {
+  if (!session) {
+    return ["no page session to carry a telemetry stream"];
+  }
+  if (typeof claimedObservationMs !== "number" || !Number.isFinite(claimedObservationMs)) {
+    return [];
+  }
+
+  const reasons = [];
+  const beacons = session.beacons;
+  // No fixed minimum: a page that submits in three seconds owes almost nothing,
+  // while one claiming half a minute of watching has to have been reporting for
+  // most of it. The requirement scales with the claim rather than the clock.
+  const observedMs =
+    beacons.length >= 2 ? beacons[beacons.length - 1].serverAt - beacons[0].serverAt : 0;
+  // The span is quantised by the beacon interval and starts one interval after
+  // the page does, so a short honest session can only ever prove most of itself.
+  const requiredMs =
+    claimedObservationMs * TELEMETRY_COVERAGE - OBSERVATION_SLACK_MS - TELEMETRY_INTERVAL_MS;
+
+  if (observedMs < requiredMs) {
+    reasons.push(
+      `claimed ${Math.round(claimedObservationMs)}ms of observation but the session only reported for ` +
+        `${Math.round(observedMs)}ms across ${beacons.length} beacon${beacons.length === 1 ? "" : "s"}`,
+    );
+  }
+
+  if (beacons.length > 0) {
+    const sinceLast = Date.now() - beacons[beacons.length - 1].serverAt;
+    if (sinceLast > TELEMETRY_STALE_MS) {
+      reasons.push(
+        `last telemetry beacon arrived ${Math.round(sinceLast / 1000)}s before the submission`,
+      );
+    }
+  }
+
+  return reasons;
 }
 
 function clientSignal(id, description, score = 0.9) {
@@ -809,6 +970,8 @@ async function handleSubmit(req, res) {
   );
   const missingClientLayer = !instant || !behavioral;
   const { session: pageSession } = currentPageSession(req);
+  // Read before consumeChallenge deletes nothing relevant, but kept here so the
+  // signals below all see the same session object.
   const sessionAgeMs = pageSession ? Date.now() - pageSession.startedAt : undefined;
   const observationReasons = [];
 
@@ -849,6 +1012,7 @@ async function handleSubmit(req, res) {
   const provenanceReasons = validateRequestProvenance(req);
   const challenge = consumeChallenge(req, payload.challengeToken);
   const challengeValid = challenge.valid;
+  const powValid = challengeValid && verifyProofOfWork(challenge.record, payload.powNonce);
   const pageSessionReasons = validatePageSession(req, challenge.pageSessionId);
   const clientSignals = [];
 
@@ -864,6 +1028,14 @@ async function handleSubmit(req, res) {
   if (!challengeValid) {
     clientSignals.push(
       clientSignal("invalid-challenge", "Submission did not use a valid one-time page challenge"),
+    );
+  }
+  if (challengeValid && !powValid) {
+    clientSignals.push(
+      clientSignal(
+        "invalid-proof-of-work",
+        `Submission did not carry the work its challenge demanded (${challenge.record.powDifficulty} bits)`,
+      ),
     );
   }
   if (interactionReasons.length > 0) {
@@ -912,6 +1084,18 @@ async function handleSubmit(req, res) {
       clientSignal(
         "impossible-observation-window",
         `Client evidence outlived its page session: ${observationReasons.join("; ")}`,
+      ),
+    );
+  }
+  const telemetryReasons = validateTelemetryStream(
+    pageSession,
+    finiteNumber(behavioral?.observationMs) ?? finiteNumber(client.interaction?.observationMs),
+  );
+  if (telemetryReasons.length > 0) {
+    clientSignals.push(
+      clientSignal(
+        "missing-telemetry-stream",
+        `Session did not report while it claims to have been observed: ${telemetryReasons.join("; ")}`,
       ),
     );
   }
@@ -1053,6 +1237,10 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/api/challenge") {
     return sendJson(res, 200, createChallenge(req));
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/telemetry") {
+    return handleTelemetry(req, res);
   }
 
   if (req.method === "POST" && url.pathname === "/api/submit") {

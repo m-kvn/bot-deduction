@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { request as httpRequest } from "node:http";
+import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "../bot-signal/node_modules/patchright/index.mjs";
 
@@ -158,6 +159,20 @@ function rawRequest({ method = "GET", path, headers = {}, body }) {
   });
 }
 
+function solvePow(pow) {
+  if (!pow) return "";
+  for (let nonce = 0; ; nonce += 1) {
+    const digest = createHash("sha256").update(`${pow.prefix}:${nonce}`).digest();
+    let bits = 0;
+    for (const byte of digest) {
+      if (byte === 0) { bits += 8; continue; }
+      bits += Math.clz32(byte) - 24;
+      break;
+    }
+    if (bits >= pow.difficulty) return String(nonce);
+  }
+}
+
 async function apiSubmit(payload, headers = browserHeaders) {
   const response = await fetch(`${base}/api/submit`, {
     method: "POST",
@@ -285,7 +300,15 @@ if (crosscheck.code !== 0 || results.filter((item) => item.category === "Server 
 
 const server = spawn(process.execPath, [serverPath.pathname.slice(1)], {
   cwd: repoDir.pathname.slice(1),
-  env: { ...process.env, PORT: String(port), DB_FILE: ":memory:" },
+  // Escalating proof of work is a production volume control, not a per-case
+  // signal. Left on, every case after the tenth would pay seconds of hashing and
+  // be judged partly on how late in the run it happened to execute.
+  env: {
+    ...process.env,
+    PORT: String(port),
+    DB_FILE: ":memory:",
+    POW_ESCALATION_BITS: "0",
+  },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let serverLog = "";
@@ -580,6 +603,59 @@ try {
     severity: "Critical",
   });
 
+  // The challenge now carries a puzzle. A replay that satisfies every provenance
+  // gate but skips the work still costs the server nothing to reject.
+  const powChallenge = JSON.parse(
+    (await replayFetch("/api/challenge", { ...browserHeaders, referer: `${base}/index.html` })).text,
+  );
+  const skippedWork = await replaySubmit(
+    {
+      form: { name: "No proof of work", email: "no-pow@example.test" },
+      challengeToken: powChallenge.token,
+      client: cleanClient({ interaction: cleanInteraction() }),
+    },
+    { ...replayHeaders, cookie: replayCookieHeader() },
+  );
+  await expectVerdict({
+    category: "API bypass",
+    name: "Valid challenge submitted without its proof of work",
+    vector: "Replay ignores the per-challenge hash puzzle",
+    expectedVerdict: "agent",
+    response: skippedWork,
+    severity: "Critical",
+  });
+
+  // And the work alone is not enough: a long claimed observation window has to be
+  // matched by the session having actually reported across it.
+  const solvedChallenge = JSON.parse(
+    (await replayFetch("/api/challenge", { ...browserHeaders, referer: `${base}/index.html` })).text,
+  );
+  const solvedNonce = solvePow(solvedChallenge.pow);
+  const noBeacons = await replaySubmit(
+    {
+      form: { name: "No telemetry", email: "no-telemetry@example.test" },
+      challengeToken: solvedChallenge.token,
+      powNonce: solvedNonce,
+      client: cleanClient({
+        behavioral: { ...cleanBehavioral(), observationMs: 45_000 },
+        interaction: cleanInteraction({ observationMs: 45_000 }),
+        samples: {
+          mouseMoves: [], scrolls: [], keyPresses: [], clicks: [], touches: [], buttons: [],
+          observationMs: 45_000,
+        },
+      }),
+    },
+    { ...replayHeaders, cookie: replayCookieHeader() },
+  );
+  await expectVerdict({
+    category: "API bypass",
+    name: "Proof of work solved but the session never reported",
+    vector: "Offline-authored history submitted without a live telemetry stream",
+    expectedVerdict: "agent",
+    response: noBeacons,
+    severity: "Critical",
+  });
+
   const instantOnly = await apiSubmit({
     form: { name: "Instant only", email: "instant@example.test" },
     client: cleanClient({ behavioral: undefined }),
@@ -805,6 +881,8 @@ try {
         "client:forged-client-verdict",
         "client:missing-behavioral-samples",
         "client:impossible-observation-window",
+        "client:invalid-proof-of-work",
+        "client:missing-telemetry-stream",
       ].filter((id) => plumbingSignals.has(id));
       add({
         category: "False-positive guard",
