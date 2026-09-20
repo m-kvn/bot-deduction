@@ -4,6 +4,7 @@ import type {
   ButtonSample,
   ClickSample,
   ConfidenceLevel,
+  KeyReleaseSample,
   KeySample,
   MouseSample,
   ScrollSample,
@@ -59,8 +60,30 @@ const MIN_CLICK_HOLD_MS = 40;
 /** How many zero-jitter clicks must stack up before the run means anything. */
 const MIN_ZERO_JITTER_CLICKS = 3;
 
+
 /** How far back a mouse move or touch still explains a click */
 const CLICK_ORIGIN_WINDOW_MS = 2_000;
+
+/**
+ * A finger cannot press and release a key inside this. Synthesisers that emit a
+ * keystroke as one atomic action land near zero: a patched-Playwright agent
+ * measured here held every key for a mean of 2.2ms while randomising the gaps
+ * between them convincingly.
+ */
+const MIN_HUMAN_DWELL_MS = 25;
+
+/** Enough paired keys that a short median is the generator, not a stray event. */
+const MIN_DWELL_SAMPLES = 12;
+
+/**
+ * Median release-to-press gap at or under this is typing fast enough that hands
+ * overlap keys. Slower than this is hunt-and-peck, where never overlapping is
+ * perfectly human and proves nothing.
+ */
+const FAST_TYPING_FLIGHT_MS = 220;
+
+/** Enough gaps at speed to expect at least one overlap from a real typist. */
+const MIN_ROLLOVER_SAMPLES = 24;
 
 /** Cursor jumps only count as teleports when they happen quickly — a large
  * gap means the pointer likely left and re-entered the window. */
@@ -399,7 +422,9 @@ export function hasLinearScroll(scrollEvents: ScrollSample[]): boolean {
 export function hasLinearTyping(keyPresses: KeySample[]): boolean {
   // OS key auto-repeat is perfectly uniform and fast — only analyze
   // deliberate keystrokes.
-  const deliberate = keyPresses.filter((key) => !key.repeat);
+  const deliberate = keyPresses.filter(
+    (key) => !key.repeat && key.composing !== true,
+  );
 
   if (deliberate.length < MIN_KEYS_FOR_LINEAR) {
     return false;
@@ -444,7 +469,9 @@ function isRepeatedTypingWindow(intervals: number[]): boolean {
  * @internal
  */
 export function hasRepeatedTypingCadence(keyPresses: KeySample[]): boolean {
-  const deliberate = keyPresses.filter((key) => !key.repeat);
+  const deliberate = keyPresses.filter(
+    (key) => !key.repeat && key.composing !== true,
+  );
   if (deliberate.length < TYPING_REPEAT_WINDOW + 1) return false;
 
   const intervals: number[] = [];
@@ -594,6 +621,134 @@ export function hasInjectedKeyInput(keyPresses: KeySample[]): boolean {
 }
 
 /**
+ * A trusted contact in the 2s before the press means the browser synthesised it
+ * from a finger, so its coordinates and hold time describe the touch stack
+ * rather than a hand on a mouse.
+ *
+ * The window has to look backwards and be generous. Touch Events § "the user
+ * agent must dispatch touchstart before any mouse event types for that action",
+ * and the compatibility events arrive only once the finger lifts, so a contact
+ * precedes its press by however long the tap was held. `CLICK_ORIGIN_WINDOW_MS`
+ * is the span this file already uses to decide that a touch explains a click.
+ * @internal
+ */
+function isTouchDerivedPress(down: ButtonSample, touches: TouchSample[]): boolean {
+  return hasRecentSample(
+    touches.filter((touch) => touch.isTrusted),
+    down.t,
+    CLICK_ORIGIN_WINDOW_MS,
+  );
+}
+
+/** A press worth timing: a real, deliberate, physical key. */
+function isTimeableKey(key: KeySample): boolean {
+  return (
+    key.isTrusted &&
+    !key.repeat &&
+    key.composing !== true &&
+    typeof key.code === "string" &&
+    key.code.length > 0
+  );
+}
+
+/**
+ * Presses matched to the release that ended them, in press order.
+ *
+ * Each release is consumed once, so a key held across another keystroke pairs
+ * with its own release rather than the nearest one.
+ * @internal
+ */
+function pairKeystrokes(
+  keyPresses: KeySample[],
+  keyReleases: KeyReleaseSample[],
+): Array<{ down: number; up: number }> {
+  const releases = keyReleases.filter(
+    (release) =>
+      release.isTrusted &&
+      release.composing !== true &&
+      typeof release.code === "string",
+  );
+  const taken = new Set<number>();
+  const pairs: Array<{ down: number; up: number }> = [];
+
+  for (const press of keyPresses.filter(isTimeableKey)) {
+    const index = releases.findIndex(
+      (release, at) =>
+        !taken.has(at) && release.code === press.code && release.t >= press.t,
+    );
+    if (index === -1) continue;
+    taken.add(index);
+    pairs.push({ down: press.t, up: releases[index].t });
+  }
+
+  return pairs;
+}
+
+function medianOf(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+/**
+ * Keys that were never really held down.
+ *
+ * Dwell time is the half of typing rhythm that evasion tooling forgets: an
+ * agent can randomise the gaps between keystrokes into a convincing
+ * distribution and still emit each key as an instantaneous press, because the
+ * API it drives takes a character rather than a hold.
+ * @internal
+ */
+export function hasSyntheticKeyDwell(
+  keyPresses: KeySample[],
+  keyReleases: KeyReleaseSample[] = [],
+  touches: TouchSample[] = [],
+): boolean {
+  // A soft keyboard manufactures its own key events, so their hold time belongs
+  // to the input method and says nothing about the hand using it.
+  if (touches.length > 0) return false;
+
+  const dwell = pairKeystrokes(keyPresses, keyReleases).map(
+    (pair) => pair.up - pair.down,
+  );
+  if (dwell.length < MIN_DWELL_SAMPLES) return false;
+
+  return medianOf(dwell) < MIN_HUMAN_DWELL_MS;
+}
+
+/**
+ * Fast typing in which no two keys were ever down together.
+ *
+ * Hands overlap keys at speed — the next key goes down before the last one
+ * comes up, which is why flight times in keystroke-dynamics data go negative.
+ * A synthesiser stepping one discrete press at a time never does, however well
+ * it randomises the intervals. Gated on speed, because hunt-and-peck typing
+ * genuinely has no overlap.
+ * @internal
+ */
+export function hasAbsentKeyRollover(
+  keyPresses: KeySample[],
+  keyReleases: KeyReleaseSample[] = [],
+  touches: TouchSample[] = [],
+): boolean {
+  if (touches.length > 0) return false;
+
+  const pairs = pairKeystrokes(keyPresses, keyReleases);
+  if (pairs.length < MIN_ROLLOVER_SAMPLES) return false;
+
+  const flights: number[] = [];
+  for (let index = 1; index < pairs.length; index += 1) {
+    flights.push(pairs[index].down - pairs[index - 1].up);
+  }
+
+  if (medianOf(flights) > FAST_TYPING_FLIGHT_MS) return false;
+
+  return flights.every((flight) => flight > 0);
+}
+
+/**
  * Detects primary-button presses that no hand produced.
  *
  * `mouse_event(MOUSEEVENTF_LEFTDOWN)` followed by `MOUSEEVENTF_LEFTUP` releases
@@ -608,6 +763,7 @@ export function hasInjectedKeyInput(keyPresses: KeySample[]): boolean {
 export function hasZeroJitterClicks(
   buttons: ButtonSample[] | undefined,
   mouseMoves: MouseSample[],
+  touches: TouchSample[] = [],
 ): boolean {
   const presses = (buttons ?? []).filter((button) => button.isTrusted);
 
@@ -623,6 +779,15 @@ export function hasZeroJitterClicks(
     const down = presses[index - 1];
 
     if (down.kind !== "down" || up.kind !== "up") {
+      continue;
+    }
+
+    // Touch Events requires a tap's compatibility events to be dispatched "at
+    // the location of the touchend event", so press and release share one
+    // coordinate by specification and the hold is the browser's, not a hand's.
+    // Every tap therefore has zero jitter, and measuring one against a mouse
+    // marks every touchscreen user as a machine.
+    if (isTouchDerivedPress(down, touches)) {
       continue;
     }
 
@@ -894,7 +1059,21 @@ export function buildBehavioralSignals(samples: BehavioralSamples): BehavioralSi
     createSignal(
       "zero-jitter-clicks",
       "Every measured click released on the exact pixel it pressed, or too fast to be a finger",
-      hasZeroJitterClicks(samples.buttons, samples.mouseMoves),
+      hasZeroJitterClicks(samples.buttons, samples.mouseMoves, touches),
+      0.3,
+      "medium",
+    ),
+    createSignal(
+      "synthetic-key-dwell",
+      "Keys were released as fast as they were pressed, with no hold a finger could make",
+      hasSyntheticKeyDwell(samples.keyPresses, samples.keyReleases, touches),
+      0.6,
+      "high",
+    ),
+    createSignal(
+      "absent-key-rollover",
+      "Typing was fast yet no two keys were ever down together",
+      hasAbsentKeyRollover(samples.keyPresses, samples.keyReleases, touches),
       0.3,
       "medium",
     ),

@@ -14,6 +14,8 @@ import {
   hasGeneratedPointerPath,
   hasInjectedKeyInput,
   hasRepeatedTypingCadence,
+  hasSyntheticKeyDwell,
+  hasAbsentKeyRollover,
   hasZeroJitterClicks,
   hasNoMouseActivity,
   hasSyntheticEvents,
@@ -29,6 +31,7 @@ import type {
   MouseSample,
   ScrollSample,
   TouchSample,
+  KeyReleaseSample,
 } from "../src/behavioral/types.js";
 
 function createLinearMouseMoves(count = 8): MouseSample[] {
@@ -1199,5 +1202,154 @@ describe("generated pointer paths", () => {
     expect(result.signals.filter((signal) => signal.triggered).map((signal) => signal.id))
       .toContain("generated-pointer-path");
     expect(result.isLegitClient).toBe(false);
+  });
+});
+
+describe("touch input is not judged as mouse input", () => {
+  const press = (t: number, x: number, y: number, kind: "down" | "up") => ({
+    kind,
+    x,
+    y,
+    screenX: x,
+    screenY: y,
+    t,
+    isTrusted: true,
+  });
+
+  // Three taps. Touch Events dispatches the compatibility press/release only
+  // once the finger lifts, so the contact precedes its press by the hold time —
+  // 220ms here, a perfectly ordinary tap.
+  const taps = [0, 1_000, 2_000];
+  const buttons = taps.flatMap((base) => [
+    press(base + 220, 400, 300, "down"),
+    press(base + 286, 400, 300, "up"),
+  ]);
+  const touches = taps.map((base) => ({
+    t: base,
+    isTrusted: true,
+    x: 400,
+    y: 300,
+    kind: "start" as const,
+  }));
+
+  it("does not flag taps that release on the pixel they pressed", () => {
+    // Identical presses, judged as a mouse, read as machine-made.
+    expect(hasZeroJitterClicks(buttons, [])).toBe(true);
+    // With the contacts that produced them, there is no mouse to have drifted.
+    expect(hasZeroJitterClicks(buttons, [], touches)).toBe(false);
+  });
+
+  it("still flags mouse presses when the contacts are unrelated", () => {
+    // Older than CLICK_ORIGIN_WINDOW_MS, so it explains nothing.
+    const distant = [{ t: 60_000, isTrusted: true, x: 400, y: 300, kind: "start" as const }];
+    expect(hasZeroJitterClicks(buttons, [], distant)).toBe(true);
+  });
+
+  it("ignores untrusted contacts, which a script can fabricate", () => {
+    const forged = touches.map((touch) => ({ ...touch, isTrusted: false }));
+    expect(hasZeroJitterClicks(buttons, [], forged)).toBe(true);
+  });
+
+  it("excludes IME composition from typing rhythm", () => {
+    // A soft keyboard commits text through composition, so the intervals belong
+    // to the input method rather than the hand, and repeat by construction.
+    const template = [73, 118, 91, 147, 84];
+    const composed: KeySample[] = [{ t: 0, isTrusted: true, composing: true }];
+    let timestamp = 0;
+    for (let index = 0; index < 20; index += 1) {
+      timestamp += template[index % template.length];
+      composed.push({ t: timestamp, isTrusted: true, composing: true });
+    }
+
+    expect(hasRepeatedTypingCadence(composed)).toBe(false);
+    expect(hasLinearTyping(composed)).toBe(false);
+
+    // The same cadence typed on real keys is still a programmed template.
+    const typed = composed.map(({ composing: _composing, ...key }) => key);
+    expect(hasRepeatedTypingCadence(typed)).toBe(true);
+  });
+});
+
+describe("key dwell and rollover", () => {
+  // Build a typing session: `dwellMs` is how long each key is held, `flightMs`
+  // the gap from release to the next press.
+  const session = ({ n = 40, dwellMs = 90, flightMs = 120, jitter = 40 }) => {
+    const keyPresses: KeySample[] = [];
+    const keyReleases: KeyReleaseSample[] = [];
+    let t = 0;
+    for (let index = 0; index < n; index += 1) {
+      const code = `Key${String.fromCharCode(65 + (index % 26))}`;
+      const hold = dwellMs + (index % 5) * (jitter / 5);
+      keyPresses.push({ t, isTrusted: true, code, printable: true });
+      keyReleases.push({ t: t + hold, isTrusted: true, code });
+      t += hold + flightMs + (index % 7) * (jitter / 7);
+    }
+    return { keyPresses, keyReleases };
+  };
+
+  it("flags keys released as fast as they were pressed", () => {
+    // What a patched-Playwright agent produces: ~2ms holds, human-looking gaps.
+    const agent = session({ dwellMs: 2, jitter: 3, flightMs: 160 });
+    expect(hasSyntheticKeyDwell(agent.keyPresses, agent.keyReleases)).toBe(true);
+  });
+
+  it("leaves a real hand alone", () => {
+    const human = session({ dwellMs: 90 });
+    expect(hasSyntheticKeyDwell(human.keyPresses, human.keyReleases)).toBe(false);
+    // Even a light, quick touch stays well clear of the floor.
+    const quick = session({ dwellMs: 45 });
+    expect(hasSyntheticKeyDwell(quick.keyPresses, quick.keyReleases)).toBe(false);
+  });
+
+  it("says nothing without enough paired keys, or without releases at all", () => {
+    const short = session({ n: 6, dwellMs: 2 });
+    expect(hasSyntheticKeyDwell(short.keyPresses, short.keyReleases)).toBe(false);
+    // Older clients send no releases; that must not become evidence.
+    expect(hasSyntheticKeyDwell(session({ dwellMs: 2 }).keyPresses, [])).toBe(false);
+    expect(hasSyntheticKeyDwell(session({ dwellMs: 2 }).keyPresses)).toBe(false);
+  });
+
+  it("exempts soft keyboards, whose hold time is the input method's", () => {
+    const agent = session({ dwellMs: 2 });
+    const touches = [{ t: 0, isTrusted: true, x: 1, y: 1, kind: "start" as const }];
+    expect(hasSyntheticKeyDwell(agent.keyPresses, agent.keyReleases, touches)).toBe(false);
+  });
+
+  it("ignores IME composition and auto-repeat", () => {
+    const composed = session({ dwellMs: 2 });
+    expect(
+      hasSyntheticKeyDwell(
+        composed.keyPresses.map((key) => ({ ...key, composing: true })),
+        composed.keyReleases.map((release) => ({ ...release, composing: true })),
+      ),
+    ).toBe(false);
+    expect(
+      hasSyntheticKeyDwell(
+        composed.keyPresses.map((key) => ({ ...key, repeat: true })),
+        composed.keyReleases,
+      ),
+    ).toBe(false);
+  });
+
+  it("flags fast typing where no two keys were ever down together", () => {
+    const stepped = session({ n: 40, dwellMs: 60, flightMs: 90, jitter: 20 });
+    expect(hasAbsentKeyRollover(stepped.keyPresses, stepped.keyReleases)).toBe(true);
+  });
+
+  it("does not flag a hand that overlaps keys", () => {
+    const rolled = session({ n: 40, dwellMs: 60, flightMs: 90, jitter: 20 });
+    // One overlap is enough: a later key went down before the previous came up.
+    rolled.keyReleases[10] = { ...rolled.keyReleases[10], t: rolled.keyPresses[11].t + 15 };
+    expect(hasAbsentKeyRollover(rolled.keyPresses, rolled.keyReleases)).toBe(false);
+  });
+
+  it("does not flag slow hunt-and-peck typing, which never overlaps", () => {
+    const slow = session({ n: 40, dwellMs: 90, flightMs: 700, jitter: 200 });
+    expect(hasAbsentKeyRollover(slow.keyPresses, slow.keyReleases)).toBe(false);
+  });
+
+  it("needs a long enough run before absent overlap means anything", () => {
+    const brief = session({ n: 10, dwellMs: 60, flightMs: 90 });
+    expect(hasAbsentKeyRollover(brief.keyPresses, brief.keyReleases)).toBe(false);
   });
 });

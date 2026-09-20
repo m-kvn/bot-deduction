@@ -18,6 +18,7 @@ import {
   isEngineInconsistent,
   isErrorStackAutomation,
   isGpuPlatformMismatch,
+  isEmptyPlugins,
   isIframeInconsistent,
   isLanguageInconsistent,
   isMediaQueryInconsistent,
@@ -36,7 +37,7 @@ import {
   isSuspiciousWindowDimensions,
   isZeroConnectionRtt,
 } from "../src/detectInstantClient.js";
-import { hasRealmPersonaMismatch } from "../src/checks.js";
+import { hasRealmPersonaMismatch, isTouchPrimaryDevice } from "../src/checks.js";
 import type { ExtendedNavigator, ExtendedWindow } from "../src/types.js";
 
 const CHROME_UA =
@@ -3002,5 +3003,82 @@ describe("speech voice platform attribution", () => {
         } as Partial<ExtendedNavigator>),
       ),
     ).resolves.toBe(false);
+  });
+});
+
+describe("android in desktop-site mode", () => {
+  // Chrome for Android's "Request desktop site" sends exactly this UA.
+  const ANDROID_DESKTOP_UA =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+
+  function createDevice({
+    renderer = "Adreno (TM) 740",
+    userAgent = ANDROID_DESKTOP_UA,
+    maxTouchPoints = 5,
+    coarsePointer = true,
+    plugins = 0,
+  } = {}) {
+    const webGl = {
+      getExtension: vi
+        .fn()
+        .mockReturnValue({ UNMASKED_RENDERER_WEBGL: 1, UNMASKED_VENDOR_WEBGL: 2 }),
+      getParameter: vi.fn((parameter: number) =>
+        parameter === 1 ? renderer : "Qualcomm",
+      ),
+    };
+    return createContext({
+      document: {
+        createElement: vi.fn().mockReturnValue({
+          getContext: vi.fn((kind: string) => (kind === "webgl" ? webGl : null)),
+        }),
+      } as unknown as ExtendedWindow["document"],
+      matchMedia: ((query: string) => ({
+        matches:
+          query.includes("pointer: coarse") || query.includes("hover: none")
+            ? coarsePointer
+            : false,
+      })) as ExtendedWindow["matchMedia"],
+      navigator: {
+        userAgent,
+        appVersion: userAgent,
+        maxTouchPoints,
+        plugins: { length: plugins },
+      } as Partial<ExtendedNavigator> as ExtendedNavigator,
+    });
+  }
+
+  it("identifies a touch device regardless of the user agent", () => {
+    expect(isTouchPrimaryDevice(createDevice())).toBe(true);
+    expect(isTouchPrimaryDevice(createDevice({ maxTouchPoints: 0 }))).toBe(false);
+    expect(isTouchPrimaryDevice(createDevice({ coarsePointer: false }))).toBe(false);
+    // No matchMedia to ask: fall back to treating the device as a desktop.
+    expect(isTouchPrimaryDevice(createContext())).toBe(false);
+  });
+
+  it("does not call a phone GPU a mismatch when the hardware is a phone", () => {
+    expect(isGpuPlatformMismatch(createDevice())).toBe(false);
+    expect(isGpuPlatformMismatch(createDevice({ renderer: "Mali-G715" }))).toBe(false);
+  });
+
+  it("still flags a phone GPU when nothing on the device can be touched", () => {
+    expect(isGpuPlatformMismatch(createDevice({ maxTouchPoints: 0 }))).toBe(true);
+    expect(isGpuPlatformMismatch(createDevice({ coarsePointer: false }))).toBe(true);
+  });
+
+  it("does not let a touch screen excuse a desktop GPU under a Linux user agent", () => {
+    // A Windows box claiming Linux is still lying; touch emulation must not buy it cover.
+    expect(
+      isGpuPlatformMismatch(
+        createDevice({
+          renderer: "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0, D3D11)",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts an empty plugin list from a phone that hid Android from its user agent", () => {
+    expect(isEmptyPlugins(createDevice())).toBe(false);
+    // A genuine desktop with no plugins is still worth noting.
+    expect(isEmptyPlugins(createDevice({ maxTouchPoints: 0 }))).toBe(true);
   });
 });

@@ -11,6 +11,7 @@ import type {
   MouseSample,
   ScrollSample,
   TouchSample,
+  KeyReleaseSample,
 } from "./types.js";
 
 const DEFAULT_MIN_OBSERVATION_MS = 3_000;
@@ -43,6 +44,7 @@ function createEmptySamples(observationMs = 0): Required<BehavioralSamples> {
     clicks: [],
     touches: [],
     buttons: [],
+    keyReleases: [],
     observationMs,
   };
 }
@@ -89,6 +91,7 @@ export function createBehavioralClientDetector(
     pruneStream(samples.clicks, cutoff);
     pruneStream(samples.touches, cutoff);
     pruneStream(samples.buttons, cutoff);
+    pruneStream(samples.keyReleases, cutoff);
   };
 
   const record = <T extends { t: number }>(stream: T[], sample: T): void => {
@@ -162,6 +165,20 @@ export function createBehavioralClientDetector(
       code: keyboardEvent.code,
       keyCode: keyboardEvent.keyCode,
       printable: typeof keyboardEvent.key === "string" && [...keyboardEvent.key].length === 1,
+      composing: keyboardEvent.isComposing,
+    });
+  };
+
+  /**
+   * Only the release time and which key it was. Dwell needs nothing else, and
+   * the press already carried the rest.
+   */
+  const onKeyUp = (event: Event): void => {
+    const keyboardEvent = event as KeyboardEvent;
+    record<KeyReleaseSample>(samples.keyReleases, {
+      t: Date.now(),
+      isTrusted: keyboardEvent.isTrusted,
+      code: keyboardEvent.code,
       composing: keyboardEvent.isComposing,
     });
   };
@@ -246,6 +263,7 @@ export function createBehavioralClientDetector(
     addListener(context, "mousemove", onMouseMove);
     addListener(context, "wheel", onWheel);
     addListener(context, "keydown", onKeyDown);
+    addListener(context, "keyup", onKeyUp);
     addListener(context, "click", onClick);
     addListener(context, "mousedown", onMouseDown);
     addListener(context, "mouseup", onMouseUp);
@@ -324,6 +342,7 @@ export function createBehavioralClientDetector(
       clicks: [...samples.clicks],
       touches: [...samples.touches],
       buttons: [...samples.buttons],
+      keyReleases: [...samples.keyReleases],
       observationMs: getObservationMs(),
     };
   };
@@ -374,6 +393,8 @@ export {
   hasGeneratedPointerPath,
   hasInjectedKeyInput,
   hasRepeatedTypingCadence,
+  hasSyntheticKeyDwell,
+  hasAbsentKeyRollover,
   hasZeroJitterClicks,
   hasNoMouseActivity,
   hasSyntheticEvents,
