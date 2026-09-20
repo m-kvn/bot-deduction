@@ -12,13 +12,18 @@ const SOFTWARE_RENDERER_PATTERNS = [
  * GPU strings that only exist on one platform. A renderer that names a
  * graphics backend the claimed OS cannot run is a spoofed WebGL identity.
  */
-const GPU_PLATFORM_RULES: Array<{ renderer: RegExp; platform: RegExp }> = [
+const GPU_PLATFORM_RULES: Array<{
+  renderer: RegExp;
+  platform: RegExp;
+  /** Renderer belongs to a phone or tablet, so desktop-mode spoofing applies. */
+  handheld?: boolean;
+}> = [
   { renderer: /Direct3D|\bD3D(?:9|11|12)\b/i, platform: /Windows|Win64|WOW64/i },
   {
     renderer: /Metal Renderer|Apple GPU|Apple M\d/i,
     platform: /Macintosh|Mac OS X|iPhone|iPad|iPod/i,
   },
-  { renderer: /Adreno|Mali-|PowerVR Rogue/i, platform: /Android/i },
+  { renderer: /Adreno|Mali-|PowerVR Rogue/i, platform: /Android/i, handheld: true },
 ];
 
 /** `navigator.deviceMemory` is quantised to powers of two by every engine. */
@@ -387,6 +392,40 @@ export function isSoftwareRenderer(context: ExtendedWindow): boolean {
  * The WebGL renderer names a graphics backend the User-Agent's platform
  * cannot provide — Direct3D off Windows, Metal off Apple, Adreno off Android.
  */
+/**
+ * A real touch device, established without trusting the User-Agent.
+ *
+ * Chrome for Android's "Request desktop site" rewrites the UA to
+ * `X11; Linux x86_64` but leaves `maxTouchPoints` and the CSS pointer type
+ * alone, because those describe hardware rather than the identity the page is
+ * shown. Both together separate a phone presenting itself as a desktop from a
+ * desktop that is lying about what it is.
+ */
+export function isTouchPrimaryDevice(context: ExtendedWindow): boolean {
+  const maxTouchPoints = context.navigator.maxTouchPoints;
+  if (typeof maxTouchPoints !== "number" || maxTouchPoints === 0) {
+    return false;
+  }
+
+  const matchMedia = context.matchMedia;
+  if (typeof matchMedia !== "function") {
+    return false;
+  }
+
+  // Asking for both is what the platform guidance recommends: `pointer: coarse`
+  // alone also matches a desktop whose primary pointer is a stylus or a TV
+  // remote, and requiring `hover: none` as well means a spoofer has to fake the
+  // CSS environment too, not just a navigator field.
+  try {
+    return (
+      matchMedia.call(context, "(pointer: coarse)").matches === true &&
+      matchMedia.call(context, "(hover: none)").matches === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function isGpuPlatformMismatch(context: ExtendedWindow): boolean {
   const identity = readWebGlIdentity(context);
   if (!identity) {
@@ -395,9 +434,21 @@ export function isGpuPlatformMismatch(context: ExtendedWindow): boolean {
 
   const userAgent = context.navigator.userAgent;
   const gpu = `${identity.vendor} ${identity.renderer}`;
-  return GPU_PLATFORM_RULES.some(
-    (rule) => rule.renderer.test(gpu) && !rule.platform.test(userAgent),
-  );
+  return GPU_PLATFORM_RULES.some((rule) => {
+    if (!rule.renderer.test(gpu) || rule.platform.test(userAgent)) {
+      return false;
+    }
+
+    // A phone GPU on a device that really has a touch screen is a mobile
+    // browser in desktop mode, not a fabricated environment. The UA is the
+    // only thing "Request desktop site" changes, so the hardware still agrees
+    // with the renderer and there is no contradiction left to report.
+    if (rule.handheld && isTouchPrimaryDevice(context)) {
+      return false;
+    }
+
+    return true;
+  });
 }
 
 /** Window has no browser chrome and sits at the origin — common in headless automation */
@@ -425,7 +476,13 @@ export function isEmptyPlugins(context: ExtendedWindow): boolean {
 
   // Mobile Chrome exposes no plugins by design, so an empty list there is
   // normal, not suspicious — only desktop Chromium ships the fixed PDF set.
-  if (/Mobi|Android/i.test(context.navigator.userAgent)) {
+  // The UA alone cannot carry this exemption: "Request desktop site" strips
+  // `Android` from it while the device stays a phone, which turned every such
+  // visitor into a suspect. Ask the hardware too.
+  if (
+    /Mobi|Android/i.test(context.navigator.userAgent) ||
+    isTouchPrimaryDevice(context)
+  ) {
     return false;
   }
 

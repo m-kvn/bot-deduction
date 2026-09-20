@@ -319,6 +319,7 @@ const SAMPLE_LIMITS = {
   clicks: 60,
   touches: 200,
   buttons: 120,
+  keyReleases: 400,
 };
 
 function slimSamples(samples) {
@@ -330,6 +331,7 @@ function slimSamples(samples) {
     clicks: take(samples.clicks, SAMPLE_LIMITS.clicks),
     touches: take(samples.touches, SAMPLE_LIMITS.touches),
     buttons: take(samples.buttons, SAMPLE_LIMITS.buttons),
+    keyReleases: take(samples.keyReleases, SAMPLE_LIMITS.keyReleases),
     observationMs: samples.observationMs,
   };
 }

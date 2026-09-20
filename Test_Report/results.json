@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-20T14:21:09.708Z",
+  "generatedAt": "2026-09-20T15:55:12.436Z",
   "target": "http://localhost:8787/index.html",
   "isolatedTarget": "http://127.0.0.1:8877",
   "browser": "Google Chrome via Patchright (headful) plus Patchright Chromium (headless)",
@@ -609,9 +609,9 @@
       "name": "Human-like automated Patchright session",
       "vector": "Codex/Patchright curved pointer path, varied typing cadence, CDP click",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.685",
+      "actual": "AGENT, score 0.92",
       "passed": true,
-      "evidence": "HTTP 202; browser chips: instant: 0.00 human\nbehavioral: 0.55 agent",
+      "evidence": "HTTP 202; browser chips: instant: 0.64 agent\nbehavioral: 0.69 agent",
       "severity": ""
     },
     {
@@ -622,7 +622,7 @@
       "expected": "no sample-integrity signal fires on honest evidence",
       "actual": "none fired",
       "passed": true,
-      "evidence": "Signals seen: behavioral:repeated-typing-cadence, behavioral:zero-jitter-clicks",
+      "evidence": "Signals seen: behavioral:repeated-typing-cadence, instant:isWebGLSupported, instant:isShaderF16Supported, behavioral:zero-jitter-clicks, behavioral:absent-key-rollover, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -631,9 +631,9 @@
       "name": "OS-level SendInput text injection into a real browser",
       "vector": "KEYEVENTF_UNICODE / VK_PACKET keystrokes — trusted events, real window, real page load",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.958",
+      "actual": "AGENT, score 0.985",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:injected-key-input, behavioral:zero-jitter-clicks",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:injected-key-input, instant:isWebGLSupported, instant:isShaderF16Supported, behavioral:zero-jitter-clicks, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -642,7 +642,7 @@
       "name": "Hardware-keycode control does not trip the injection signal",
       "vector": "Input.dispatchKeyEvent with a real code/keyCode pair",
       "expected": "injected-key-input stays quiet for keystrokes that name a physical key",
-      "actual": "behavioral chip: behavioral: 0.35 human",
+      "actual": "behavioral chip: behavioral: 0.74 agent",
       "passed": true,
       "evidence": "Guards the OS-injection signal against flagging ordinary typing",
       "severity": ""
@@ -653,9 +653,9 @@
       "name": "Field values set in one call (fill/insertText)",
       "vector": "Whole field delivered in a single trusted insertText, no keystrokes",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.8",
+      "actual": "AGENT, score 0.927",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -675,9 +675,9 @@
       "name": "HTMLElement.click() without pointer movement",
       "vector": "JavaScript button.click()",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.948",
+      "actual": "AGENT, score 0.981",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, behavioral:click-without-mouse-movement, behavioral:no-mouse-activity",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, instant:isWebGLSupported, behavioral:click-without-mouse-movement, instant:isShaderF16Supported, instant:isZeroConnectionRtt, behavioral:no-mouse-activity",
       "severity": ""
     },
     {
@@ -686,9 +686,9 @@
       "name": "dispatchEvent(new MouseEvent('click'))",
       "vector": "DOM dispatchEvent click",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.9",
+      "actual": "AGENT, score 0.981",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, instant:isWebGLSupported, behavioral:click-without-mouse-movement, instant:isShaderF16Supported, instant:isZeroConnectionRtt, behavioral:no-mouse-activity",
       "severity": ""
     },
     {
@@ -697,9 +697,9 @@
       "name": "HTMLElement.click() after trusted mouse movement",
       "vector": "Trusted move immediately followed by synthetic click",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.9",
+      "actual": "AGENT, score 0.964",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -708,9 +708,9 @@
       "name": "dispatchEvent click after trusted mouse movement",
       "vector": "Trusted move masks click-without-movement heuristic",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.9",
+      "actual": "AGENT, score 0.964",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -719,9 +719,9 @@
       "name": "form.requestSubmit()",
       "vector": "DOM requestSubmit without pointer/keyboard event",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.8",
+      "actual": "AGENT, score 0.927",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -730,9 +730,9 @@
       "name": "dispatchEvent(new Event('submit'))",
       "vector": "Synthetic submit event not monitored by behavioral layer",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.8",
+      "actual": "AGENT, score 0.927",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -741,9 +741,9 @@
       "name": "Enter-key form submission",
       "vector": "Single trusted keyboard event after DOM value assignment",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.8",
+      "actual": "AGENT, score 0.927",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -752,9 +752,9 @@
       "name": "Synthetic rapid key sequence",
       "vector": "Six untrusted keydown events then requestSubmit",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.935",
+      "actual": "AGENT, score 0.976",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, behavioral:linear-typing",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, instant:isWebGLSupported, behavioral:linear-typing, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -763,9 +763,9 @@
       "name": "Synthetic linear mouse path",
       "vector": "Fourteen uniform untrusted mousemove events",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.9",
+      "actual": "AGENT, score 0.973",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, instant:isWebGLSupported, instant:isShaderF16Supported, behavioral:linear-mouse-movement, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -774,9 +774,9 @@
       "name": "Synthetic uniform scrolling",
       "vector": "Eight equal untrusted wheel events at equal cadence",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.93",
+      "actual": "AGENT, score 0.975",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, behavioral:linear-scroll",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, instant:isWebGLSupported, instant:isShaderF16Supported, behavioral:linear-scroll, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -785,9 +785,9 @@
       "name": "Synthetic teleporting pointer",
       "vector": "Untrusted >600px mouse jump",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.94",
+      "actual": "AGENT, score 0.978",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, behavioral:teleport-mouse",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, behavioral:teleport-mouse, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -796,9 +796,9 @@
       "name": "Synthetic linear touch gesture",
       "vector": "Untrusted touchstart/touchmove sequence",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.9",
+      "actual": "AGENT, score 0.964",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -809,7 +809,7 @@
       "expected": "AGENT",
       "actual": "AGENT, score 1",
       "passed": true,
-      "evidence": "HTTP 403; signals: instant:isWebDriver, instant:isHeadless, client:untrusted-form-interaction, instant:isNativeFunctionTampered",
+      "evidence": "HTTP 403; signals: instant:isWebDriver, instant:isHeadless, client:untrusted-form-interaction, instant:isNativeFunctionTampered, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -820,7 +820,7 @@
       "expected": "AGENT",
       "actual": "AGENT, score 1",
       "passed": true,
-      "evidence": "HTTP 403; signals: instant:isPlaywright, client:untrusted-form-interaction, instant:isAutomationArtifacts",
+      "evidence": "HTTP 403; signals: instant:isPlaywright, client:untrusted-form-interaction, instant:isAutomationArtifacts, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -831,7 +831,7 @@
       "expected": "AGENT",
       "actual": "AGENT, score 1",
       "passed": true,
-      "evidence": "HTTP 403; signals: instant:isPuppeteer, client:untrusted-form-interaction, instant:isAutomationArtifacts",
+      "evidence": "HTTP 403; signals: instant:isPuppeteer, client:untrusted-form-interaction, instant:isAutomationArtifacts, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -842,7 +842,7 @@
       "expected": "AGENT",
       "actual": "AGENT, score 1",
       "passed": true,
-      "evidence": "HTTP 403; signals: instant:isSelenium, client:untrusted-form-interaction, instant:isAutomationArtifacts",
+      "evidence": "HTTP 403; signals: instant:isSelenium, client:untrusted-form-interaction, instant:isAutomationArtifacts, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -853,7 +853,7 @@
       "expected": "AGENT",
       "actual": "AGENT, score 1",
       "passed": true,
-      "evidence": "HTTP 403; signals: instant:isDomAutomation, client:untrusted-form-interaction",
+      "evidence": "HTTP 403; signals: instant:isDomAutomation, client:untrusted-form-interaction, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -862,9 +862,9 @@
       "name": "Implausibly small screen",
       "vector": "120×160 viewport and screen",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.94",
+      "actual": "AGENT, score 0.978",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, instant:isSuspiciousResolution",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, instant:isSuspiciousResolution, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
@@ -873,9 +873,9 @@
       "name": "Tampered navigator.languages getter",
       "vector": "navigator.languages emptied with a patched native getter",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.978",
+      "actual": "AGENT, score 0.992",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, instant:isNativeFunctionTampered, instant:isLanguageInconsistent",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, instant:isNativeFunctionTampered, instant:isLanguageInconsistent, instant:isWebGLSupported, instant:isShaderF16Supported, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {

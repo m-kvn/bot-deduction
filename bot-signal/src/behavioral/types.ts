@@ -62,6 +62,20 @@ export interface KeySample {
   composing?: boolean;
 }
 
+/**
+ * A key being released. Paired with its `keydown` by `code`, this gives dwell
+ * time — how long the key was held — which no synthesiser that emits a key as
+ * one atomic press ever produces realistically.
+ */
+export interface KeyReleaseSample {
+  t: number;
+  isTrusted: boolean;
+  /** `KeyboardEvent.code`, used to pair a release with its press. */
+  code?: string;
+  /** `KeyboardEvent.isComposing` — the IME's timing, not the hand's. */
+  composing?: boolean;
+}
+
 export interface ButtonSample {
   /** `"down"` or `"up"` for the primary pointer button. */
   kind: "down" | "up";
@@ -114,6 +128,8 @@ export interface BehavioralSamples {
   touches?: TouchSample[];
   /** Primary-button press/release pairs — used to measure click-hold jitter. */
   buttons?: ButtonSample[];
+  /** Key releases — paired with `keyPresses` to measure dwell and rollover. */
+  keyReleases?: KeyReleaseSample[];
   observationMs: number;
 }
 

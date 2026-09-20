@@ -56,6 +56,7 @@ const MAX_SAMPLES = {
   clicks: 60,
   touches: 200,
   buttons: 120,
+  keyReleases: 400,
 };
 
 // Clock drift and the gap between the document response and the detector's first
@@ -608,6 +609,12 @@ function sanitizeSamples(raw) {
       x: finiteNumber(entry.x),
       y: finiteNumber(entry.y),
     })),
+    keyReleases: stream(raw.keyReleases, MAX_SAMPLES.keyReleases, (entry) => ({
+      t: finiteNumber(entry.t),
+      isTrusted: entry.isTrusted === true,
+      code: typeof entry.code === "string" ? entry.code.slice(0, 40) : undefined,
+      composing: entry.composing === true,
+    })),
     buttons: stream(raw.buttons, MAX_SAMPLES.buttons, (entry) => ({
       kind: entry.kind === "up" ? "up" : "down",
       x: finiteNumber(entry.x) ?? 0,
@@ -1020,6 +1027,7 @@ async function handleSubmit(req, res) {
       ...samples.clicks,
       ...samples.touches,
       ...samples.buttons,
+      ...samples.keyReleases,
     ].map((sample) => sample.t);
     const earliest = stamps.length > 0 ? Math.min(...stamps) : undefined;
     if (earliest !== undefined && earliest < MIN_EPOCH_MS) {
