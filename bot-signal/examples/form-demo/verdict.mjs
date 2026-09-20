@@ -20,6 +20,21 @@ export const MIN_SUPPORTING_SIGNALS = 2;
 export const AGGREGATE_SCORE_THRESHOLD = Number(process.env.AGGREGATE_SCORE_THRESHOLD ?? 0.6);
 export const MIN_CORROBORATING_LAYERS = Number(process.env.MIN_CORROBORATING_LAYERS ?? 2);
 
+/**
+ * Not every 0.30 is worth the same.
+ *
+ * "This desktop has no webcam" and "this address is a datacenter" describe an
+ * environment that millions of real people are sitting in. "Every click released
+ * on the pixel it pressed" describes how the input was produced, which is a
+ * statement about the session rather than the machine. When the evidence includes
+ * at least one of the latter, less of it is needed — so a run that spreads two
+ * tells across an environment layer and a behavioural one still gets caught,
+ * while a VPN user without a webcam keeps the higher bar.
+ */
+export const AGGREGATE_BEHAVIORAL_THRESHOLD = Number(
+  process.env.AGGREGATE_BEHAVIORAL_THRESHOLD ?? 0.5,
+);
+
 /** Independent-probability union: extra evidence always raises the score, never past 1. */
 export function combineScores(scores) {
   return 1 - scores.reduce((accumulator, score) => accumulator * (1 - score), 1);
@@ -61,8 +76,14 @@ export function decideVerdict({
     decisiveServerScores.length > 0,
   ].filter(Boolean).length;
 
+  // Evidence about how the session behaved, as opposed to what machine it is on.
+  const hasConductEvidence =
+    clientSignalScores.length > 0 || (behavioralScore !== null && behavioralScore > 0);
+  const aggregateThreshold = hasConductEvidence
+    ? AGGREGATE_BEHAVIORAL_THRESHOLD
+    : AGGREGATE_SCORE_THRESHOLD;
   const aggregateRejects =
-    score >= AGGREGATE_SCORE_THRESHOLD && corroboratingLayers >= MIN_CORROBORATING_LAYERS;
+    score >= aggregateThreshold && corroboratingLayers >= MIN_CORROBORATING_LAYERS;
 
   const isAgent =
     clientRejects ||

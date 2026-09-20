@@ -29,6 +29,18 @@ const cases = [
     want: "agent",
     input: { instantScore: 0, behavioralScore: 0.7, serverScore: 0 } },
 
+  { name: "REPORTED RUN 2: 0.30 instant + 0.30 behavioral, server 0.00",
+    want: "agent",
+    input: { instantScore: 0.30, behavioralScore: 0.30, serverScore: 0 } },
+
+  { name: "desktop with no webcam, otherwise clean (environment only)",
+    want: "human",
+    input: { instantScore: 0.30, behavioralScore: 0, serverScore: 0 } },
+
+  { name: "trackpad tap-to-click user, no webcam (FP risk)",
+    want: "??",
+    input: { instantScore: 0.30, behavioralScore: 0.30, serverScore: 0 } },
+
   { name: "any hard client gate",
     want: "agent",
     input: { instantScore: 0, behavioralScore: 0, serverScore: 0, clientSignalScores: [0.9] } },
