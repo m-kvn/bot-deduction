@@ -371,6 +371,7 @@ export {
   hasLinearTapRhythm,
   hasLinearTouchMovement,
   hasLinearTyping,
+  hasGeneratedPointerPath,
   hasInjectedKeyInput,
   hasRepeatedTypingCadence,
   hasZeroJitterClicks,

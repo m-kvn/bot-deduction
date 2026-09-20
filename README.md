@@ -4,8 +4,8 @@ A self-hosted contact form that decides, per submission, whether it was filled i
 by an **agent / bot** — with no auth, no CAPTCHA, no third-party API and no outbound network calls at
 request time. Every signal is computed locally from the browser and from the HTTP request itself.
 
-Latest verified run: **82/82 harness tests pass**, and **66/66 agent-driven submissions in that
-matrix are classified as AGENT** — including a real PowerShell `SendInput` session driving a live
+Latest verified run: **82/82 harness tests, 400 unit tests, 30 crosscheck cases**, and **66/66
+agent-driven submissions in the harness matrix are classified as AGENT** — including a real PowerShell `SendInput` session driving a live
 Chrome window. That is a rate over the attacks in the matrix, not a claim of completeness: an
 independent red team passed four methods it does not contain (see **Known-open vectors** below).
 Reports live in `Test_Report/`.
@@ -20,7 +20,7 @@ Reports live in `Test_Report/`.
 ├─ bot-signal/                      # the detection library + the demo app
 │  ├─ src/                          # instant, behavioral and server detectors (TypeScript)
 │  ├─ data/                         # offline IP lists (datacenter, AbuseIPDB, iCloud Relay)
-│  ├─ test/                         # 393 unit tests (vitest)
+│  ├─ test/                         # 400 unit tests (vitest)
 │  └─ examples/form-demo/
 │     ├─ server.mjs                 # the app: static pages + /api/challenge + /api/submit
 │     ├─ db.mjs                     # SQLite persistence (node:sqlite, no native deps)
@@ -289,10 +289,10 @@ live server. Both take over the mouse and keyboard while they run.
 
 ### Known-open vectors
 
-An independent red team built ten bypass methods against this app and read every verdict back from
-`GET /api/submissions`. Six passed. Two classes were fixed (the forged client verdict, and a
-sub-40 ms dwell gap in `zero-jitter-clicks`); these remain open, and are stated here rather than
-buried:
+Ten bypass methods were run against the current build, every verdict read back from
+`GET /api/submissions`. **Six are caught, four still classify as human** — the full measured matrix
+is in [`Test_Report/BYPASS_MATRIX.md`](Test_Report/BYPASS_MATRIX.md). These two classes remain open,
+and are stated here rather than buried:
 
 | Vector | Why it is open |
 |---|---|
@@ -309,6 +309,15 @@ proposed again:
 | CDP can drive an unfocused window, a human cannot | `document.hasFocus()` stayed `true` under CDP input with the OS window inactive | rejected — not observable |
 
 Probes: `Test_Report/probe/cdp_timing_probe.mjs`, `coalesced_probe.mjs`, `focus_probe.mjs`.
+
+A fourth idea — `generated-pointer-path` — is implemented and unit-tested but **does not catch these
+scripts in practice**. All four move the pointer with a quadratic Bézier whose jitter is applied to
+the curve parameter, leaving every sample on one convex arc (0.22–0.25 px deviation on long sweeps,
+against 0 crossings). On a real form fill the reaches are short enough that `SetCursorPos` rounding
+through 1.25× display scaling contributes ~0.45 px by itself, which is the same order as the signal.
+Widening the threshold far enough to catch C4 needs a measured human baseline that does not exist
+yet; `Test_Report/BYPASS_MATRIX.md` has the numbers and the calibration command. It is shipped
+inert, not counted as a fix.
 
 **Honest limitation:** this raises the cost of forgery; it does not make it impossible. Both open
 vectors produce genuinely trusted events, a real page load and human-grade input, so the samples the
@@ -345,7 +354,7 @@ stops being silently accepted.
 
 ```bash
 cd bot-signal
-npm test                                   # 393 unit tests
+npm test                                   # 400 unit tests
 node examples/form-demo/crosscheck.mjs     # 30 server-detection cases
 
 npx patchright install chromium            # once, for the browser harness
