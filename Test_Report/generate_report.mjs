@@ -1,9 +1,10 @@
+import { fileURLToPath } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
 import { chromium } from "../bot-signal/node_modules/patchright/index.mjs";
 
 const here = new URL("./", import.meta.url);
-const report = JSON.parse(await readFile(new URL("results.json", here), "utf8"));
-const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const report = JSON.parse(await readFile(fileURLToPath(new URL("results.json", here)), "utf8"));
+const chromePath = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 
 const escapeHtml = (value) =>
   String(value ?? "")
@@ -14,7 +15,7 @@ const escapeHtml = (value) =>
     .replaceAll("'", "&#039;");
 
 const imageData = async (name) => {
-  const bytes = await readFile(new URL(name, here));
+  const bytes = await readFile(fileURLToPath(new URL(name, here)));
   return `data:image/png;base64,${bytes.toString("base64")}`;
 };
 
@@ -260,14 +261,14 @@ const html = `<!doctype html>
 </body>
 </html>`;
 
-await writeFile(new URL("test_report.html", here), html, "utf8");
+await writeFile(fileURLToPath(new URL("test_report.html", here)), html, "utf8");
 
 const browser = await chromium.launch({ headless: true, executablePath: chromePath });
 try {
   const page = await browser.newPage();
   await page.goto(new URL("test_report.html", here).href, { waitUntil: "load" });
   await page.pdf({
-    path: new URL("test_report.pdf", here).pathname.slice(1),
+    path: fileURLToPath(new URL("test_report.pdf", here)),
     format: "A4",
     printBackground: true,
     displayHeaderFooter: true,

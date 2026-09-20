@@ -1,5 +1,6 @@
 import { chromium } from "../../bot-signal/node_modules/patchright/index.mjs";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const chromePath = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const base = process.env.TARGET ?? "http://localhost:8787";
@@ -110,7 +111,7 @@ const psOut = await new Promise((resolve) => {
       "-ExecutionPolicy",
       "Bypass",
       "-File",
-      new URL("real_injection.ps1", import.meta.url).pathname.slice(1),
+      fileURLToPath(new URL("real_injection.ps1", import.meta.url)),
     ],
     { env: { ...process.env, BS_FIELDS: fields, BS_SUBMIT: `${submit.x},${submit.y}` } },
   );
@@ -133,7 +134,7 @@ if (!response) {
 }
 
 await page.screenshot({
-  path: new URL("real_injection_result.png", import.meta.url).pathname.slice(1),
+  path: fileURLToPath(new URL("real_injection_result.png", import.meta.url)),
   fullPage: true,
 });
 await browser.close();
