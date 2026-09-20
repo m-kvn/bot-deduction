@@ -10,6 +10,7 @@ import {
   INSTANT_SCORE_THRESHOLD,
   combineScores,
   decideVerdict,
+  hasHardEvidence,
 } from "./verdict.mjs";
 import {
   clearSubmissions,
@@ -1241,7 +1242,20 @@ async function handleSubmit(req, res) {
   // Deliberately after the verdict and never folded into it: `verdict` stays a
   // statement about this one submission, `outcome` is what to do about it.
   const riskReasons = assessRisk(req, form, pageSession);
-  const outcome = isAgent ? "rejected" : riskReasons.length > 0 ? "review" : "accepted";
+  // Circumstantial evidence holds a submission; it does not refuse one. A virtual
+  // machine, a touch typist and a trackpad can each produce one of these on their
+  // own, and a real person managed all three at once.
+  const hardEvidence = hasHardEvidence(
+    signals.map((signal) => signal.id),
+    clientSignals.map((signal) => signal.score),
+  );
+  const outcome = isAgent
+    ? hardEvidence
+      ? "rejected"
+      : "review"
+    : riskReasons.length > 0
+      ? "review"
+      : "accepted";
   record.outcome = outcome;
   record.risk = riskReasons;
 

@@ -35,6 +35,43 @@ export const AGGREGATE_BEHAVIORAL_THRESHOLD = Number(
   process.env.AGGREGATE_BEHAVIORAL_THRESHOLD ?? 0.5,
 );
 
+/**
+ * Evidence that a person essentially cannot produce: an automation driver
+ * announcing itself, events the page itself synthesised, text that arrived with
+ * no keystroke behind it, or a protocol-level gate the browser could not have
+ * failed honestly.
+ *
+ * Everything else is circumstantial. A GPU string that does not match the
+ * platform is a virtual machine, a remote desktop or a browser started with
+ * --disable-gpu. Rhythmic typing is a touch typist. Clicks that release on the
+ * pixel they pressed are tap-to-click on a trackpad. Each of those is worth
+ * noting and none of them is worth calling someone a robot over on its own, so a
+ * verdict built only from them is held for review rather than refused outright.
+ */
+export const HARD_SIGNAL_IDS = new Set([
+  "isWebDriver",
+  "isWebDriverInWorker",
+  "isSuspiciousWebDriverDescriptor",
+  "isPlaywright",
+  "isPuppeteer",
+  "isChromeDriver",
+  "isSelenium",
+  "isPhantomJS",
+  "isNightmare",
+  "isDomAutomation",
+  "isAutomationArtifacts",
+  "isHeadless",
+  "isErrorStackAutomation",
+  "isNativeFunctionTampered",
+  "synthetic-events",
+  "injected-key-input",
+]);
+
+/** True when any triggered signal is something a person could not have produced. */
+export function hasHardEvidence(signalIds = [], clientSignalScores = []) {
+  return clientSignalScores.length > 0 || signalIds.some((id) => HARD_SIGNAL_IDS.has(id));
+}
+
 /** Independent-probability union: extra evidence always raises the score, never past 1. */
 export function combineScores(scores) {
   return 1 - scores.reduce((accumulator, score) => accumulator * (1 - score), 1);

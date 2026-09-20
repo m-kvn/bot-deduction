@@ -263,6 +263,30 @@ No threshold separates them, because the difference is not in the score.
 The decision is isolated in `verdict.mjs`; `verdict_check.mjs` prints the full table for any
 threshold you set, so the trade can be moved with its consequences visible rather than guessed at.
 
+### Circumstantial evidence holds; it does not refuse
+
+That trade-off stopped being hypothetical: a real person was rejected on
+`isGpuPlatformMismatch` (0.60) + `repeated-typing-cadence` (0.55) + `zero-jitter-clicks` (0.30). Two
+of those are individually decisive, and each describes something ordinary — a virtual machine or a
+remote desktop, a touch typist, and tap-to-click on a trackpad.
+
+So evidence is now split by kind. **Hard** evidence is what a person essentially cannot produce: an
+automation driver announcing itself, events the page synthesised, text with no keystroke behind it,
+or a protocol gate the browser could not have failed honestly. Everything else is circumstantial.
+
+| Evidence | Verdict | Outcome | HTTP |
+|---|---|---|---|
+| Hard | `agent` | `rejected` | 403 |
+| Circumstantial only | `agent` | `review` | 202 |
+| None | `human` | `accepted` / `review` on repetition | 200 / 202 |
+
+The verdict stays honest, and nobody is refused on the basis that their laptop has no webcam. The
+list is `HARD_SIGNAL_IDS` in `verdict.mjs`.
+
+**This does not fix the underlying problem.** Three signals fired on one real person, which is what
+tuning against bots with no measured human sessions produces. The weights need a baseline, not
+another adjustment.
+
 1. **Instant (browser)** — headless markers, `navigator.webdriver`, automation globals (Playwright,
    Puppeteer, Selenium, CDP), implausible screen geometry, tampered navigator getters.
 2. **Behavioral (browser)** — mouse / scroll / key / touch cadence, synthetic-event counts, linear or
