@@ -65,6 +65,10 @@ export const HARD_SIGNAL_IDS = new Set([
   "isNativeFunctionTampered",
   "synthetic-events",
   "injected-key-input",
+  // A median key hold under 25ms is a claim about physiology, not circumstance:
+  // the check already stands down for soft keyboards, IME composition and auto
+  // repeat, so what is left is a key that was never actually held.
+  "synthetic-key-dwell",
 ]);
 
 /** True when any triggered signal is something a person could not have produced. */
