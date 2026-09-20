@@ -16,6 +16,7 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(here, "public");
 const globalBuild = join(here, "..", "..", "dist", "browser.global.js");
 const PORT = Number(process.env.PORT ?? 8787);
+const HOST = process.env.HOST ?? "127.0.0.1";
 const LIST_LIMIT = 200;
 const CHALLENGE_TTL_MS = 5 * 60_000;
 const MAX_ACTIVE_CHALLENGES = 10_000;
@@ -740,7 +741,8 @@ const server = createServer(async (req, res) => {
 
 await preloadIpLists();
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
+  console.log(`Listening:  ${HOST}:${PORT}`);
   console.log(`Form:      http://localhost:${PORT}/`);
   console.log(`Dashboard: http://localhost:${PORT}/dashboard.html`);
   console.log(`SQLite:    ${dbFile}`);

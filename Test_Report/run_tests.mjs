@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "../bot-signal/node_modules/patchright/index.mjs";
 
@@ -8,12 +9,12 @@ const serverPath = new URL("../bot-signal/examples/form-demo/server.mjs", import
 const crosscheckPath = new URL("../bot-signal/examples/form-demo/crosscheck.mjs", import.meta.url);
 const port = 8877;
 const base = `http://127.0.0.1:${port}`;
-const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const chromePath = process.env.CHROME_PATH ?? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const results = [];
 const browserErrors = [];
 let sequence = 0;
 
-await mkdir(reportDir, { recursive: true });
+await mkdir(fileURLToPath(reportDir), { recursive: true });
 
 function add({ category, name, vector, expected, actual, passed, evidence = "", severity = "" }) {
   sequence += 1;
@@ -152,8 +153,8 @@ async function apiSubmit(payload, headers = browserHeaders) {
 }
 
 async function runCrosscheck() {
-  const run = await runProcess(process.execPath, [crosscheckPath.pathname.slice(1)], {
-    cwd: repoDir.pathname.slice(1),
+  const run = await runProcess(process.execPath, [fileURLToPath(crosscheckPath)], {
+    cwd: fileURLToPath(repoDir),
     env: { ...process.env, PORT: "8900" },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -239,7 +240,7 @@ async function browserCase(browser, spec) {
     });
     if (spec.screenshot) {
       await page.locator("#result h2").waitFor({ state: "visible" });
-      await page.screenshot({ path: new URL(spec.screenshot, reportDir).pathname.slice(1), fullPage: true });
+      await page.screenshot({ path: fileURLToPath(new URL(spec.screenshot, reportDir)), fullPage: true });
     }
     return response;
   } finally {
@@ -261,8 +262,8 @@ if (crosscheck.code !== 0 || results.filter((item) => item.category === "Server 
   });
 }
 
-const server = spawn(process.execPath, [serverPath.pathname.slice(1)], {
-  cwd: repoDir.pathname.slice(1),
+const server = spawn(process.execPath, [fileURLToPath(serverPath)], {
+  cwd: fileURLToPath(repoDir),
   env: { ...process.env, PORT: String(port), DB_FILE: ":memory:" },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -621,7 +622,7 @@ try {
         severity: "High",
       });
       await page.locator("#result h2").waitFor({ state: "visible" });
-      await page.screenshot({ path: new URL("human_control.png", reportDir).pathname.slice(1), fullPage: true });
+      await page.screenshot({ path: fileURLToPath(new URL("human_control.png", reportDir)), fullPage: true });
     } finally {
       await context.close();
     }
@@ -932,7 +933,7 @@ try {
           ui.agents === api.agents &&
           ui.rows === api.submissions.length,
       });
-      await page.screenshot({ path: new URL("dashboard.png", reportDir).pathname.slice(1), fullPage: true });
+      await page.screenshot({ path: fileURLToPath(new URL("dashboard.png", reportDir)), fullPage: true });
     } finally {
       await context.close();
     }
@@ -1026,7 +1027,7 @@ const summary = {
   crosscheckOutput: crosscheck.stdout,
 };
 
-await writeFile(new URL("results.json", reportDir), JSON.stringify(summary, null, 2));
+await writeFile(fileURLToPath(new URL("results.json", reportDir)), JSON.stringify(summary, null, 2));
 console.log(JSON.stringify({ total: summary.total, passed: summary.passed, failed: summary.failed }, null, 2));
 for (const item of results.filter((result) => !result.passed)) {
   console.log(`FAIL ${item.id}: ${item.name} — expected ${item.expected}; actual ${item.actual}`);
