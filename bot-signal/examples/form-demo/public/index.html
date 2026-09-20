@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Contact us — bot-signal demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <nav class="topbar">
+        <span class="brand">bot-signal <span class="muted">form demo</span></span>
+        <a class="link" href="./dashboard.html">Dashboard →</a>
+      </nav>
+
+      <section class="card">
+        <h1>Contact us</h1>
+        <p class="muted">
+          Every submission is scored live: instant fingerprint + behavioral input analysis in the
+          browser, IP / TLS / header analysis on the server.
+        </p>
+
+        <form id="contact-form" autocomplete="off">
+          <label>
+            Name
+            <input name="name" type="text" required placeholder="Jane Doe" />
+          </label>
+          <label>
+            Email
+            <input name="email" type="email" required placeholder="jane@company.com" />
+          </label>
+          <label>
+            Company
+            <input name="company" type="text" placeholder="Acme Inc." />
+          </label>
+          <label>
+            Message
+            <textarea name="message" rows="4" placeholder="How can we help?"></textarea>
+          </label>
+          <button type="submit">Submit</button>
+        </form>
+
+        <div id="live" class="live">
+          <span class="chip" id="chip-instant">instant: …</span>
+          <span class="chip" id="chip-behavioral">behavioral: …</span>
+        </div>
+
+        <div id="result" class="result hidden"></div>
+      </section>
+    </main>
+
+    <script src="/vendor/bot-signal.global.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

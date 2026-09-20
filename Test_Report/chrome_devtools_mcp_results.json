@@ -1,0 +1,37 @@
+{
+  "target": "http://localhost:8787/index.html",
+  "tool": "Chrome DevTools MCP",
+  "total": 4,
+  "passed": 4,
+  "results": [
+    {
+      "method": "MCP fill_form + click",
+      "expected": "agent",
+      "actual": "agent",
+      "score": 1,
+      "httpStatus": 403,
+      "signals": ["isWebDriver", "isHeadless", "linear-typing"]
+    },
+    {
+      "method": "JavaScript HTMLElement.click() through MCP",
+      "expected": "agent",
+      "actual": "agent",
+      "score": 1,
+      "signals": ["isWebDriver", "isHeadless", "untrusted-form-interaction", "synthetic-events", "click-without-mouse-movement"]
+    },
+    {
+      "method": "JavaScript form.requestSubmit() through MCP",
+      "expected": "agent",
+      "actual": "agent",
+      "score": 1,
+      "signals": ["isWebDriver", "isHeadless", "untrusted-form-interaction"]
+    },
+    {
+      "method": "JavaScript dispatchEvent(submit) through MCP",
+      "expected": "agent",
+      "actual": "agent",
+      "score": 1,
+      "signals": ["isWebDriver", "isHeadless", "untrusted-form-interaction"]
+    }
+  ]
+}

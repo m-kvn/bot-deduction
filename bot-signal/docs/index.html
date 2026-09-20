@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>bot-signal — Bot &amp; Headless Browser Detection for JavaScript</title>
+    <meta
+      name="description"
+      content="Open-source bot detection for JavaScript and Node.js. Detect headless Chrome, Playwright, Puppeteer, Selenium and scripted mouse or touch input. Run the checks against your own browser."
+    />
+    <link rel="canonical" href="https://okasi.github.io/bot-signal/" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta
+      name="google-site-verification"
+      content="G42lKEq5-YoPS_cs8aXazifmMExJujtM0iPwtA90q-k"
+    />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="bot-signal" />
+    <meta property="og:url" content="https://okasi.github.io/bot-signal/" />
+    <meta
+      property="og:title"
+      content="bot-signal — Bot &amp; Headless Browser Detection for JavaScript"
+    />
+    <meta
+      property="og:description"
+      content="Detect headless Chrome, Playwright, Puppeteer and Selenium in the browser and on the server. Run the real library against your own browser."
+    />
+    <meta property="og:image" content="https://okasi.github.io/bot-signal/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="bot-signal — multi-layer bot detection for JavaScript and Node.js"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="bot-signal — Bot &amp; Headless Browser Detection for JavaScript"
+    />
+    <meta
+      name="twitter:description"
+      content="Detect headless Chrome, Playwright, Puppeteer and Selenium in the browser and on the server."
+    />
+    <meta name="twitter:image" content="https://okasi.github.io/bot-signal/og.png" />
+
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "SoftwareSourceCode",
+            "@id": "https://okasi.github.io/bot-signal/#software",
+            "name": "bot-signal",
+            "description": "Multi-layer bot and automation detection for JavaScript and Node.js: instant browser checks, behavioral scoring, and server-side IP, TLS, and timezone signals.",
+            "url": "https://okasi.github.io/bot-signal/",
+            "codeRepository": "https://github.com/okasi/bot-signal",
+            "programmingLanguage": "TypeScript",
+            "runtimePlatform": ["Node.js", "Web browser"],
+            "license": "https://opensource.org/licenses/MIT",
+            "author": { "@type": "Person", "name": "okasi" },
+            "keywords": "bot detection, headless browser detection, Playwright detection, Puppeteer detection, Selenium detection, WebDriver, browser fingerprinting, anti-bot"
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://okasi.github.io/bot-signal/#website",
+            "name": "bot-signal",
+            "url": "https://okasi.github.io/bot-signal/",
+            "about": { "@id": "https://okasi.github.io/bot-signal/#software" }
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "Can bot-signal detect headless Chrome?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. It checks the HeadlessChrome User-Agent, appVersion and Client Hints brands, plus indirect tells such as a software WebGL renderer, missing media devices, an unbranded Chromium build with no H.264, and zero Network Information RTT."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does it detect Playwright, Puppeteer and Selenium?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. It looks for Playwright bindings and init scripts, Puppeteer evaluation artifacts, ChromeDriver cdc_ keys and Selenium document markers, and it detects the Chrome DevTools Protocol by its Error serialization side effect in both the page and a worker."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does bot-signal need an API key or external service?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. The GeoIP database and IP blocklists are bundled with the package and refreshed weekly, so detection runs entirely on your own infrastructure."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Will it block real users by mistake?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Every signal carries a weight and a confidence level. Definitive automation markers weigh 0.9 to 1.0 and block on their own, while ambiguous checks that also fire on in-app browsers, virtual machines, and privacy-hardened browsers weigh 0.25 to 0.5 so they only block when several stack up. Browser fingerprint protection is treated as a privacy feature, not as automation."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can a determined bot evade it?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Client-side detection is a cost, not a wall, and a purpose-built anti-detect browser can pass the instant checks. That is why the library scores three independent layers: forging the browser environment, human-looking mouse and touch input, and a residential IP with a matching TLS fingerprint all at once is a much higher bar than any one of them."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does it work with React, Next.js or plain HTML?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "All three. The package ships ESM and CJS builds with TypeScript types, resolves to a browser-only bundle in browser bundlers, and is also published as a script tag build on unpkg for pages with no build step."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+    <script>
+      // Apply the stored theme before first paint to avoid a flash.
+      const storedTheme = localStorage.getItem("dbc-theme");
+      if (storedTheme === "light" || storedTheme === "dark") {
+        document.documentElement.dataset.theme = storedTheme;
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#instant">Skip to results</a>
+
+    <header class="topbar">
+      <div class="shell topbar__inner">
+        <a class="brand" href="#top" aria-label="bot-signal home">
+          <img class="brand__mark" src="./icon.svg" alt="" />
+          <span class="brand__name">bot-signal</span>
+        </a>
+        <nav class="topbar__nav" aria-label="Sections">
+          <a href="#instant">Instant</a>
+          <a href="#behavioral">Behavioral</a>
+          <a href="#server">Server</a>
+          <a href="#quickstart">Quick start</a>
+          <a href="#faq">FAQ</a>
+        </nav>
+        <div class="topbar__actions">
+          <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle color theme">
+            <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.7" />
+              <path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+            </svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <a class="ghost-btn" href="https://github.com/okasi/bot-signal">GitHub</a>
+          <a class="ghost-btn ghost-btn--accent" href="https://www.npmjs.com/package/bot-signal">npm</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="top">
+      <!-- ============================== HERO ============================== -->
+      <section class="hero">
+        <div class="shell hero__inner">
+          <div class="hero__copy">
+            <h1 class="hero__title">
+              <span class="hero__eyebrow">Bot detection for JavaScript &amp; Node.js — live demo</span>
+              Is your browser<br /><span id="hero-highlight" class="hero__highlight">being scanned…</span>
+            </h1>
+            <p class="hero__lede">
+              <strong>bot-signal</strong> detects headless Chrome, Playwright, Puppeteer and
+              Selenium, and scores scripted mouse, touch and typing input — in the browser and
+              on the server. This page runs the real library against <em>you</em>.
+            </p>
+            <div class="install" role="group" aria-label="Install command">
+              <code class="install__cmd" id="install-cmd">npm install bot-signal</code>
+              <button class="install__copy" id="copy-install" type="button" aria-label="Copy install command">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5 15V6a2 2 0 0 1 2-2h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                <span class="visually-hidden">Copy</span>
+              </button>
+            </div>
+            <p class="hero__meta">
+              TypeScript · ESM + CJS · browser/server entry points · one dependency · MIT
+            </p>
+          </div>
+
+          <div class="hero__panel">
+            <div id="hero-verdict" class="scan-card" role="status" aria-live="polite">
+              <div class="scan-card__radar" aria-hidden="true">
+                <div class="radar">
+                  <div class="radar__sweep"></div>
+                  <div class="radar__ring radar__ring--1"></div>
+                  <div class="radar__ring radar__ring--2"></div>
+                  <div class="radar__dot"></div>
+                </div>
+              </div>
+              <div class="scan-card__body">
+                <span class="scan-card__label">Verdict</span>
+                <strong class="scan-card__verdict" id="hero-verdict-text">Scanning…</strong>
+                <span class="scan-card__detail" id="hero-verdict-detail">Running instant checks</span>
+              </div>
+              <dl class="scan-card__stats">
+                <div><dt>Instant checks</dt><dd id="hero-stat-instant">–</dd></div>
+                <div><dt>Flagged</dt><dd id="hero-stat-flagged">–</dd></div>
+                <div><dt>Behavioral score</dt><dd id="hero-stat-score">not run</dd></div>
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================ INSTANT ============================ -->
+      <section class="section" id="instant" aria-labelledby="instant-title">
+        <div class="shell">
+          <header class="section__head">
+            <div>
+              <p class="section__kicker">Layer 1 · synchronous</p>
+              <h2 id="instant-title">Instant detection</h2>
+              <p class="section__desc">
+                <code>detectInstantClient(window)</code> inspects the environment in a single pass —
+                WebDriver flags, automation artifacts, rendering, and window geometry. Signals roll up
+                into a weighted <code>suspicionScore</code>.
+              </p>
+            </div>
+            <div class="section__actions">
+              <button id="run-instant" class="btn btn--primary" type="button">Re-run checks</button>
+              <button id="run-async" class="btn" type="button">
+                Run async <span class="btn__hint">+ 6 checks</span>
+              </button>
+            </div>
+          </header>
+
+          <div id="instant-banner" class="banner banner--pending" role="status" aria-live="polite">
+            <span class="banner__icon" aria-hidden="true"></span>
+            <div class="banner__text">
+              <strong id="instant-banner-title">Analyzing your browser…</strong>
+              <span id="instant-banner-detail">Loading the detection bundle</span>
+            </div>
+            <span id="instant-banner-pill" class="pill pill--pending">pending</span>
+          </div>
+
+          <div class="toolbar">
+            <div class="chips" role="group" aria-label="Filter checks">
+              <button class="chip chip--on" data-filter="all" type="button">All</button>
+              <button class="chip" data-filter="flagged" type="button">Suspicious</button>
+              <button class="chip" data-filter="passed" type="button">Not suspicious</button>
+            </div>
+            <span class="toolbar__count" id="instant-count"></span>
+          </div>
+
+          <div class="check-grid" id="check-grid"></div>
+
+          <div class="sim-strip">
+            <span class="sim-strip__label">Pretend to be a bot:</span>
+            <button id="sim-webdriver" class="btn btn--danger-ghost" type="button">
+              Inject <code>navigator.webdriver</code>
+            </button>
+            <button id="sim-playwright" class="btn btn--danger-ghost" type="button">
+              Inject <code>window.__playwright</code>
+            </button>
+            <button id="sim-reset" class="btn" type="button" hidden>Reset page</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================== BEHAVIORAL =========================== -->
+      <section class="section section--alt" id="behavioral" aria-labelledby="behavioral-title">
+        <div class="shell">
+          <header class="section__head">
+            <div>
+              <p class="section__kicker">Layer 2 · over time</p>
+              <h2 id="behavioral-title">Behavioral detection</h2>
+              <p class="section__desc">
+                <code>createBehavioralClientDetector()</code> watches how the pointer, touch,
+                wheel, and keyboard behave. Humans are noisy; scripts are not. Swipe paths and tap
+                rhythm are scored the same way mouse movement is, so this works on a phone or
+                tablet. Keyboard clicks and key auto-repeat are recognized — they never count
+                against you.
+              </p>
+            </div>
+            <div class="section__actions">
+              <button id="observe-btn" class="btn btn--primary" type="button">Observe for 5s</button>
+              <button id="replay-bot" class="btn btn--danger-ghost" type="button">Replay a bot script</button>
+            </div>
+          </header>
+
+          <div class="behavioral-grid">
+            <div class="trail-card">
+              <div class="trail-card__head">
+                <h3>What the detector sees</h3>
+                <span class="trail-card__hint">move or swipe, scroll, tap, type — anywhere on the page</span>
+              </div>
+              <canvas id="trail-canvas" class="trail-canvas" aria-label="Live visualization of your recent pointer and touch movement" role="img"></canvas>
+              <div class="trail-card__counters" aria-live="off">
+                <div class="counter"><span class="counter__value" id="count-moves">0</span><span class="counter__label">mouse moves</span></div>
+                <div class="counter"><span class="counter__value" id="count-scrolls">0</span><span class="counter__label">scrolls</span></div>
+                <div class="counter"><span class="counter__value" id="count-keys">0</span><span class="counter__label">keys</span></div>
+                <div class="counter"><span class="counter__value" id="count-clicks">0</span><span class="counter__label">clicks</span></div>
+                <div class="counter"><span class="counter__value" id="count-touches">0</span><span class="counter__label">touches</span></div>
+                <div class="counter"><span class="counter__value" id="count-synthetic">0</span><span class="counter__label">synthetic</span></div>
+              </div>
+              <label class="type-field">
+                <span>Typing sample</span>
+                <input id="type-input" type="text" autocomplete="off" placeholder="Type a few words naturally…" />
+              </label>
+            </div>
+
+            <div class="score-card">
+              <div id="behavioral-banner" class="banner banner--pending banner--tight" role="status" aria-live="polite">
+                <span class="banner__icon" aria-hidden="true"></span>
+                <div class="banner__text">
+                  <strong id="behavioral-banner-title">Idle</strong>
+                  <span id="behavioral-banner-detail">Interact with the page, then start an observation</span>
+                </div>
+                <span id="behavioral-banner-pill" class="pill pill--pending">pending</span>
+              </div>
+
+              <div class="meter" aria-hidden="false">
+                <div class="meter__head">
+                  <span class="meter__title">Suspicion score</span>
+                  <output class="meter__value" id="score-value" for="observe-btn">0.000</output>
+                </div>
+                <div class="meter__track">
+                  <div class="meter__fill" id="score-fill"></div>
+                  <div class="meter__threshold" style="--at: 55%">
+                    <span class="meter__threshold-label">0.55 threshold</span>
+                  </div>
+                </div>
+                <div class="meter__scale"><span>0 · human</span><span>1 · automated</span></div>
+              </div>
+
+              <ul class="signal-list" id="signal-list" aria-label="Behavioral signals"></ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================ SERVER ============================= -->
+      <section class="section" id="server" aria-labelledby="server-title">
+        <div class="shell">
+          <header class="section__head">
+            <div>
+              <p class="section__kicker">Layer 3 · Node</p>
+              <h2 id="server-title">Server-side scoring</h2>
+              <p class="section__desc">
+                <code>detectServerClientAsync()</code> runs in Node — GeoIP, datacenter ranges,
+                AbuseIPDB, iCloud Private Relay, and TLS fingerprints, all offline. This simulator
+                uses the library's real weights and formula:
+                <code>score&nbsp;=&nbsp;1&nbsp;−&nbsp;Π(1&nbsp;−&nbsp;wᵢ)</code>.
+              </p>
+              <p class="section__note" role="note">
+                <span class="section__note-label">Simulated</span>
+                This page is frontend-only — it is served as static files with no backend, so
+                nothing here inspects your real IP, TLS fingerprint, or headers. Pick a scenario
+                or toggle signals to see how the server layer would score a request; the two
+                layers above do run against your actual browser.
+              </p>
+            </div>
+            <div class="section__actions">
+              <label class="preset-label" for="preset-select">Scenario</label>
+              <select id="preset-select" class="select">
+                <option value="clean">Residential Chrome</option>
+                <option value="curl-aws">curl from an AWS box</option>
+                <option value="stealth-vpn">Stealth browser on a VPN</option>
+                <option value="relay">Safari via iCloud Relay</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+          </header>
+
+          <div class="server-grid">
+            <ul class="signal-toggles" id="server-toggles" aria-label="Server signals"></ul>
+
+            <div class="server-result">
+              <div id="server-banner" class="banner banner--ok banner--tight" role="status" aria-live="polite">
+                <span class="banner__icon" aria-hidden="true"></span>
+                <div class="banner__text">
+                  <strong id="server-banner-title">Legit client</strong>
+                  <span id="server-banner-detail">No signals triggered</span>
+                </div>
+                <span id="server-banner-pill" class="pill pill--ok">legit</span>
+              </div>
+
+              <div class="meter">
+                <div class="meter__head">
+                  <span class="meter__title">Suspicion score</span>
+                  <output class="meter__value" id="server-score-value">0.000</output>
+                </div>
+                <div class="meter__track">
+                  <div class="meter__fill" id="server-score-fill"></div>
+                  <div class="meter__threshold" style="--at: 50%">
+                    <span class="meter__threshold-label">0.50 threshold</span>
+                  </div>
+                </div>
+                <div class="meter__scale"><span>0 · human</span><span>1 · automated</span></div>
+              </div>
+
+              <div class="server-code">
+                <div class="server-code__head">
+                  <span>Illustrative context · signals score independently</span>
+                  <button class="copy-mini" data-copy-target="server-json" type="button">Copy</button>
+                </div>
+                <pre><code id="server-json"></code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================== QUICK START ========================== -->
+      <section class="section section--alt" id="quickstart" aria-labelledby="quickstart-title">
+        <div class="shell">
+          <header class="section__head">
+            <div>
+              <p class="section__kicker">Ship it</p>
+              <h2 id="quickstart-title">Quick start</h2>
+              <p class="section__desc">
+                One package, three layers. Import from the root, or use the
+                <code>/browser</code> and <code>/server</code> entry points.
+              </p>
+            </div>
+          </header>
+
+          <div class="snippet-grid">
+            <article class="snippet">
+              <div class="snippet__head">
+                <h3>Browser — block on load</h3>
+                <button class="copy-mini" data-copy-target="snippet-browser" type="button">Copy</button>
+              </div>
+              <pre><code id="snippet-browser"><span class="tok-kw">import</span> { isHuman } <span class="tok-kw">from</span> <span class="tok-str">"bot-signal"</span>;
+
+<span class="tok-kw">const</span> result = <span class="tok-fn">detectInstantClient</span>(window);
+
+<span class="tok-kw">if</span> (!result.isLegitClient) {
+  location.href = <span class="tok-str">"/blocked"</span>;
+}</code></pre>
+            </article>
+
+            <article class="snippet">
+              <div class="snippet__head">
+                <h3>Behavioral — observe &amp; score</h3>
+                <button class="copy-mini" data-copy-target="snippet-behavioral" type="button">Copy</button>
+              </div>
+              <pre><code id="snippet-behavioral"><span class="tok-kw">import</span> { createBehavioralClientDetector } <span class="tok-kw">from</span> <span class="tok-str">"bot-signal"</span>;
+
+<span class="tok-kw">const</span> result = <span class="tok-kw">await</span> <span class="tok-fn">createBehavioralClientDetector</span>({ context: window })
+  .<span class="tok-fn">observe</span>(<span class="tok-num">10_000</span>);
+
+<span class="tok-kw">if</span> (!result.isLegitClient) <span class="tok-fn">challenge</span>();</code></pre>
+            </article>
+
+            <article class="snippet">
+              <div class="snippet__head">
+                <h3>Server — score a request</h3>
+                <button class="copy-mini" data-copy-target="snippet-server" type="button">Copy</button>
+              </div>
+              <pre><code id="snippet-server"><span class="tok-kw">import</span> { detectServerClientAsync } <span class="tok-kw">from</span> <span class="tok-str">"bot-signal/server"</span>;
+
+<span class="tok-kw">const</span> result = <span class="tok-kw">await</span> <span class="tok-fn">detectServerClientAsync</span>({
+  clientIp: req.ip,
+  clientTimezone: req.headers[<span class="tok-str">"x-timezone"</span>],
+  userAgent: req.headers[<span class="tok-str">"user-agent"</span>],
+  tlsFingerprint: req.headers[<span class="tok-str">"x-ja3-hash"</span>],
+});
+
+<span class="tok-kw">if</span> (!result.isLegitClient) res.<span class="tok-fn">status</span>(<span class="tok-num">403</span>).<span class="tok-fn">end</span>();</code></pre>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== FAQ =============================== -->
+      <section class="section" id="faq" aria-labelledby="faq-title">
+        <div class="shell">
+          <header class="section__head">
+            <div>
+              <p class="section__kicker">Questions</p>
+              <h2 id="faq-title">Frequently asked</h2>
+              <p class="section__desc">
+                What the library detects, and where it deliberately stops.
+              </p>
+            </div>
+          </header>
+
+          <div class="faq">
+            <article class="faq__item">
+              <h3>Can bot-signal detect headless Chrome?</h3>
+              <p>
+                Yes. It checks the <code>HeadlessChrome</code> User-Agent,
+                <code>appVersion</code> and Client Hints brands, plus the indirect
+                tells that survive a User-Agent rewrite: a software WebGL renderer
+                (SwiftShader or llvmpipe), no enumerable media devices, an
+                unbranded Chromium build with no H.264 support, and a zero
+                Network Information RTT.
+              </p>
+            </article>
+
+            <article class="faq__item">
+              <h3>Does it detect Playwright, Puppeteer and Selenium?</h3>
+              <p>
+                Yes. It looks for Playwright bindings and init scripts, Puppeteer
+                evaluation artifacts, ChromeDriver <code>cdc_</code> keys and
+                Selenium document markers. It also detects the Chrome DevTools
+                Protocol itself, by the <code>Error</code> serialization side
+                effect it leaves in both the page and a dedicated worker — which
+                catches automation that has scrubbed its own globals.
+              </p>
+            </article>
+
+            <article class="faq__item">
+              <h3>Does it need an API key or an external service?</h3>
+              <p>
+                No. The GeoIP database and the IP blocklists ship inside the
+                package and are refreshed weekly, so every layer runs on your own
+                infrastructure with nothing phoning home.
+              </p>
+            </article>
+
+            <article class="faq__item">
+              <h3>Will it block real users by mistake?</h3>
+              <p>
+                Every signal carries a weight and a confidence level. Definitive
+                automation markers weigh 0.9–1.0 and block on their own, while
+                ambiguous checks that also fire on in-app browsers, virtual
+                machines and privacy-hardened browsers weigh 0.25–0.5, so they
+                only block when several stack up. Browser fingerprint protection
+                is treated as a privacy feature, not as automation.
+              </p>
+            </article>
+
+            <article class="faq__item">
+              <h3>Can a determined bot evade it?</h3>
+              <p>
+                Yes — client-side detection is a cost, not a wall. A purpose-built
+                anti-detect browser can pass the instant checks. That is why the
+                library scores three independent layers: forging the browser
+                environment, human-looking mouse and touch input, and a residential
+                IP with a matching TLS fingerprint all at once is a much higher bar
+                than any one of them.
+              </p>
+            </article>
+
+            <article class="faq__item">
+              <h3>Does it work with React, Next.js or plain HTML?</h3>
+              <p>
+                All three. The package ships ESM and CJS builds with TypeScript
+                types, resolves to a browser-only bundle in browser bundlers, and
+                is also published as a script tag build on unpkg for pages with no
+                build step.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="shell footer__inner">
+        <p>
+          <a href="https://github.com/okasi/bot-signal">GitHub</a> ·
+          <a href="https://www.npmjs.com/package/bot-signal">npm</a> ·
+          <a href="https://github.com/okasi/bot-signal/blob/main/LICENSE">MIT</a>
+        </p>
+        <p class="footer__ua" id="footer-ua"></p>
+      </div>
+    </footer>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
