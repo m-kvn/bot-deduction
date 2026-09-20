@@ -1,0 +1,17 @@
+<!doctype html><html><head><title>BSFILL-WINDOW</title></head>
+<body style="margin:0;background:#111;color:#eee;font:14px monospace">
+<form id="f"><input name="name"><textarea name="message"></textarea></form>
+<pre id="out">ready</pre>
+<script>
+const log = { beforeinput: [], input: [], keydownPrintable: 0, paste: 0 };
+const f = document.getElementById('f');
+f.addEventListener('beforeinput', e => {
+  log.beforeinput.push({ type: e.inputType, dataLen: (e.data||'').length, trusted: e.isTrusted });
+  dump();
+}, true);
+f.addEventListener('input', e => { log.input.push({ type: e.inputType, trusted: e.isTrusted }); dump(); }, true);
+f.addEventListener('keydown', e => { if (e.isTrusted && e.key && [...e.key].length===1) log.keydownPrintable++; dump(); }, true);
+f.addEventListener('paste', () => { log.paste++; dump(); }, true);
+function dump(){ document.documentElement.dataset.log = JSON.stringify(log); document.getElementById('out').textContent = JSON.stringify(log).slice(0,400); }
+dump();
+</script></body></html>

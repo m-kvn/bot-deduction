@@ -101,3 +101,47 @@ nonce chain across real wall-clock time, which is the intended price, not an acc
 C4, C6, C7 and C8 drive the real page, so the page solves the proof of work and beacons on their
 behalf. Nothing in round 2 touches them, and nothing is expected to: they submit genuine samples of
 input a browser cannot distinguish from a hand's.
+
+---
+
+## Round 3 — stealth frameworks, and the absence pattern
+
+A third round tested the 2025–26 stealth automation frameworks. **patchright** — isolated-world
+Playwright — passed out of the box at `human 0.20`, which is the off-the-shelf version of the raw-CDP
+case: `pip install patchright`, no fingerprint work required.
+
+The cause was not the fingerprint. It was that `pg.fill()` puts a whole field into the form in one
+call, so the behavioral layer had almost no evidence to score — and scoring near-empty evidence as
+`0.00` treats absence of evidence as evidence of humanity.
+
+Measured against Chrome 153, the distinction is exact:
+
+| Method | `beforeinput` events | printable keydowns |
+|---|---|---|
+| `pg.fill("input", "Kavin Kumar")` | **one** `insertText`, `data.length = 11` | **0** |
+| real typing | one `insertText` per character, `data.length = 1` | one per character |
+
+A keyboard delivers one character per event. Paste arrives as `insertFromPaste`, autofill as
+`insertReplacementText`, drag as `insertFromDrop`, IME commits under their own types — none are
+counted. The check fires when at least 12 characters, and at least 60% of the form's text, arrive in
+bulk inserts with no keystroke behind them, so a mobile word-suggestion alongside real typing does not
+trip it.
+
+| Case | Before | Now |
+|---|:---:|:---:|
+| `patchright_test.py` | 🟢 human 0.20 | 🔴 **agent 0.84** — `146 of 146 characters arrived without a keystroke` |
+| `nodriver_test.py` | 🔴 agent 0.90 | 🔴 agent 0.90 (unchanged — `synthetic-events`) |
+| `pw_test.py` | 🔴 agent 1.00 | 🔴 agent 1.00 |
+
+This is the highest-value catch in the whole exercise, because setting a field's value in one call is
+how nearly every real-world form bot works — Playwright and Puppeteer `fill()`, Selenium
+`send_keys` on some drivers, CDP `Input.insertText`, and plain `element.value = …`.
+
+**TLS.** The HTTP forges present a Python/HTTP-1.1 JA4 against a Chrome UA, which is invisible on a
+plain-HTTP localhost target and only becomes a signal behind an edge with `TRUST_EDGE_HEADERS=1`
+populating `x-ja4`. `curl_cffi(impersonate="chrome")` closes that gap for an attacker. Browser-driven
+methods are inherently immune, being Chrome. Worth enabling in any real deployment; it changes nothing
+here.
+
+**Still open:** C4, C6, C7, C8 — genuine trusted input, driven through the real page, typed character
+by character. They do not use bulk insertion, so this check does not touch them.

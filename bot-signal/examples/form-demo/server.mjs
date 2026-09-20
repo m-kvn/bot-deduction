@@ -27,6 +27,12 @@ const MAX_SUBMIT_INTENT_AGE_MS = 5_000;
 const MIN_INJECTED_KEY_EVENTS = 5;
 const INJECTED_KEY_EVENT_RATIO = 0.6;
 
+// Enough inserted text to be a field's worth rather than an autocorrect, and the
+// share of it that must be unaccounted for before the form reads as filled in by
+// a program rather than typed.
+const MIN_BULK_INSERTED_CHARACTERS = 12;
+const BULK_INSERTION_RATIO = 0.6;
+
 // Caps on the raw sample streams the page submits, so recomputation stays cheap
 // and a client cannot turn the audit trail into a memory attack.
 const MAX_SAMPLES = {
@@ -474,6 +480,27 @@ function validateInteraction(interaction) {
       `form text was injected at the OS level (${injectedKeys}/${printableKeys} keystrokes had no physical key)`,
     );
   }
+
+  // A keyboard delivers one character per insertText event. A single event
+  // carrying a whole field is a program setting a value — Playwright's fill(),
+  // CDP Input.insertText, or an element.value assignment. Paste, autofill, drag
+  // and IME commits arrive under their own inputType and never reach this count,
+  // and the ratio keeps a mobile word-suggestion from flagging a real typist.
+  const typed = isNonNegativeInteger(interaction.typedCharacters)
+    ? interaction.typedCharacters
+    : 0;
+  const bulk = isNonNegativeInteger(interaction.bulkInsertedCharacters)
+    ? interaction.bulkInsertedCharacters
+    : 0;
+  if (
+    bulk >= MIN_BULK_INSERTED_CHARACTERS &&
+    bulk / Math.max(bulk + typed, 1) >= BULK_INSERTION_RATIO
+  ) {
+    reasons.push(
+      `form text was inserted programmatically (${bulk} of ${bulk + typed} characters arrived without a keystroke)`,
+    );
+  }
+
 
   return reasons;
 }

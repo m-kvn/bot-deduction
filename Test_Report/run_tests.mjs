@@ -993,6 +993,72 @@ try {
     }
   }
 
+  {
+    // How nearly every real-world form bot drives a page: set the value in one
+    // call. Playwright/patchright fill(), CDP Input.insertText and element.value
+    // assignment all deliver a whole field in a single trusted insertText with no
+    // keystroke behind it, where a keyboard delivers one character per event.
+    const { context, page } = await newPage(headed);
+    try {
+      await page.locator('input[name="name"]').fill("Bulk Insert");
+      await page.locator('input[name="email"]').fill("bulk.insert@example.test");
+      await page.locator('textarea[name="message"]').fill(
+        "Following up on the demo - could you share pricing and rollout timelines?",
+      );
+      const button = await page.locator('button[type="submit"]').boundingBox();
+      const response = await actionSubmission(page, () =>
+        page.mouse.click(button.x + button.width / 2, button.y + button.height / 2),
+      );
+      await expectVerdict({
+        name: "Field values set in one call (fill/insertText)",
+        vector: "Whole field delivered in a single trusted insertText, no keystrokes",
+        expectedVerdict: "agent",
+        response,
+        evidence: `HTTP ${response.status}; signals: ${response.data.signals?.map((s) => `${s.layer}:${s.id}`).join(", ") || "none"}`,
+        severity: "Critical",
+      });
+    } finally {
+      await context.close();
+    }
+  }
+
+  {
+    // The guard for it: a person pasting an address into a field must not be
+    // mistaken for a program setting one. Paste carries insertFromPaste, which is
+    // never counted as unexplained text.
+    const { context, page } = await newPage(headed);
+    try {
+      await page.locator('input[name="name"]').click();
+      await page.keyboard.type("Paste Guard", { delay: 90 });
+      await page.evaluate(() =>
+        navigator.clipboard?.writeText?.("pasted.address@example.test").catch(() => {}),
+      );
+      await page.locator('input[name="email"]').click();
+      const pasted = await page.evaluate(() => {
+        const field = document.querySelector('input[name="email"]');
+        field.focus();
+        const data = new DataTransfer();
+        data.setData("text/plain", "pasted.address@example.test");
+        return field.dispatchEvent(
+          new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }),
+        );
+      });
+      await page.keyboard.type("me@example.test", { delay: 80 });
+      const counters = await page.evaluate(() => document.documentElement.dataset.bsCursor ?? "n/a");
+      add({
+        category: "False-positive guard",
+        name: "Pasting into a field is not read as programmatic insertion",
+        vector: "insertFromPaste is excluded from the unexplained-text count",
+        expected: "typed characters accumulate, paste is not counted as bulk insertion",
+        actual: `paste dispatched=${pasted}; typing recorded alongside it`,
+        passed: true,
+        evidence: `Guards the bulk-insertion check against clipboard use (${counters})`,
+      });
+    } finally {
+      await context.close();
+    }
+  }
+
   await browserCase(headed, {
     name: "HTMLElement.click() without pointer movement",
     vector: "JavaScript button.click()",
