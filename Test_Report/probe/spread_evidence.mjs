@@ -12,7 +12,7 @@
 // the numbers the technique produced.
 import { chromium } from "../../bot-signal/node_modules/patchright/index.mjs";
 
-const base = process.env.TARGET ?? "https://x.tail6091f7.ts.net:10000";
+const base = process.env.TARGET ?? "http://127.0.0.1:8799";
 const chromePath = process.env.CHROME_PATH ?? "C:/Program Files/Google/Chrome/Application/chrome.exe";
 
 const rand = (min, max) => min + Math.random() * (max - min);
