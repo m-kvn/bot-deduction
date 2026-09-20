@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-20T09:20:49.034Z",
+  "generatedAt": "2026-09-20T10:03:02.587Z",
   "target": "http://localhost:8787/index.html",
   "isolatedTarget": "http://127.0.0.1:8877",
   "browser": "Google Chrome via Patchright (headful) plus Patchright Chromium (headless)",
@@ -620,7 +620,7 @@
       "name": "Hardware-keycode control does not trip the injection signal",
       "vector": "Input.dispatchKeyEvent with a real code/keyCode pair",
       "expected": "injected-key-input stays quiet for keystrokes that name a physical key",
-      "actual": "behavioral chip: behavioral: 0.00 human",
+      "actual": "behavioral chip: behavioral: 0.35 human",
       "passed": true,
       "evidence": "Guards the OS-injection signal against flagging ordinary typing",
       "severity": ""
@@ -730,9 +730,9 @@
       "name": "Synthetic uniform scrolling",
       "vector": "Eight equal untrusted wheel events at equal cadence",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.93",
+      "actual": "AGENT, score 0.9",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, behavioral:linear-scroll",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events",
       "severity": ""
     },
     {

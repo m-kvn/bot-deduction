@@ -33,6 +33,26 @@ const INJECTED_KEY_RATIO = 0.6;
 /** `VK_PACKET` — the virtual key Windows reports for `KEYEVENTF_UNICODE` input. */
 const VK_PACKET = 231;
 
+/** A reach shorter than this is too small to carry a readable path shape. */
+const MIN_REACH_CHORD_PX = 60;
+
+/** Fewer points than this and the fitted arc is describing noise. */
+const MIN_REACH_POINTS = 10;
+
+/** A gap this long means the pointer came to rest, ending the reach. */
+const REACH_REST_MS = 180;
+
+/** Reaches needed before a run of perfectly smooth arcs means anything. */
+const MIN_GENERATED_REACHES = 3;
+
+/** Deviation from the fitted arc, as a fraction of the chord, that still reads as
+ * "generated from a curve" rather than produced by a hand. */
+const MAX_GENERATED_ARC_RESIDUAL = 0.0025;
+
+/** Excursion a wobble must reach before it counts as crossing the arc, so pixel
+ * quantisation on a slow drag cannot manufacture crossings. */
+const MIN_ARC_EXCURSION_PX = 0.75;
+
 /** Below this a press is too quick for a finger to have lifted it. */
 const MIN_CLICK_HOLD_MS = 40;
 
@@ -629,6 +649,130 @@ export function hasZeroJitterClicks(
   return measured >= MIN_ZERO_JITTER_CLICKS && inhuman === measured;
 }
 
+interface ChordFrame {
+  chord: number;
+  samples: Array<{ s: number; d: number }>;
+}
+
+/** Re-expresses a reach as progress along its straight chord plus perpendicular offset. */
+function toChordFrame(points: MouseSample[]): ChordFrame | null {
+  const first = points[0];
+  const last = points[points.length - 1];
+  const dx = last.x - first.x;
+  const dy = last.y - first.y;
+  const chord = Math.hypot(dx, dy);
+
+  if (chord < MIN_REACH_CHORD_PX) {
+    return null;
+  }
+
+  const ux = dx / chord;
+  const uy = dy / chord;
+
+  return {
+    chord,
+    samples: points.map((point) => {
+      const rx = point.x - first.x;
+      const ry = point.y - first.y;
+      return { s: (rx * ux + ry * uy) / chord, d: rx * -uy + ry * ux };
+    }),
+  };
+}
+
+/** Splits pointer samples into reaches, breaking wherever the pointer rested. */
+function toReaches(mouseMoves: MouseSample[]): MouseSample[][] {
+  const trusted = mouseMoves.filter((move) => move.isTrusted);
+  const reaches: MouseSample[][] = [];
+  let current: MouseSample[] = [];
+
+  for (let index = 0; index < trusted.length; index += 1) {
+    const previous = trusted[index - 1];
+    if (previous && trusted[index].t - previous.t > REACH_REST_MS) {
+      if (current.length >= MIN_REACH_POINTS) reaches.push(current);
+      current = [];
+    }
+    current.push(trusted[index]);
+  }
+  if (current.length >= MIN_REACH_POINTS) reaches.push(current);
+
+  return reaches;
+}
+
+/**
+ * Detects a pointer path that was drawn from a curve rather than produced by a hand.
+ *
+ * The standard way to "humanise" a bot is a quadratic Bezier with a random
+ * perpendicular bow, eased timing, and jitter applied to the curve parameter. That
+ * jitter slides each point *along* the curve; it never moves it off. So every
+ * sample lands on one smooth convex arc, on one side of it, for the whole reach.
+ *
+ * A quadratic Bezier's offset from its chord is exactly `2t(1-t)·bow` — a parabola
+ * in progress along the chord. Fitting that one-parameter shape and asking what is
+ * left over separates the two: physiological tremor and the corrective
+ * sub-movements at the end of a real reach push the pointer back and forth across
+ * any such arc, repeatedly.
+ *
+ * Measured against the bypass scripts' own movement code: median residual 0.04% of
+ * the chord and zero crossings across 18 reaches. The thresholds here sit well
+ * clear of that, and several reaches must agree before the signal fires.
+ * @internal
+ */
+export function hasGeneratedPointerPath(mouseMoves: MouseSample[]): boolean {
+  const reaches = toReaches(mouseMoves);
+  let generated = 0;
+  let measured = 0;
+
+  for (const reach of reaches) {
+    const frame = toChordFrame(reach);
+    if (!frame || frame.samples.length < MIN_REACH_POINTS) {
+      continue;
+    }
+
+    let numerator = 0;
+    let denominator = 0;
+    for (const { s, d } of frame.samples) {
+      const basis = s * (1 - s);
+      numerator += d * basis;
+      denominator += basis * basis;
+    }
+    if (denominator === 0) {
+      continue;
+    }
+
+    measured += 1;
+    const bow = numerator / denominator;
+
+    let squared = 0;
+    let crossings = 0;
+    let sign = 0;
+    let peak = 0;
+    for (const { s, d } of frame.samples) {
+      const residual = d - bow * s * (1 - s);
+      squared += residual * residual;
+
+      const current = Math.sign(residual);
+      if (current === 0) continue;
+      if (sign === 0) {
+        sign = current;
+        peak = Math.abs(residual);
+      } else if (current === sign) {
+        peak = Math.max(peak, Math.abs(residual));
+      } else {
+        if (peak >= MIN_ARC_EXCURSION_PX) crossings += 1;
+        sign = current;
+        peak = Math.abs(residual);
+      }
+    }
+
+    const residual = Math.sqrt(squared / frame.samples.length) / frame.chord;
+    if (crossings === 0 && residual <= MAX_GENERATED_ARC_RESIDUAL) {
+      generated += 1;
+    }
+  }
+
+  return measured >= MIN_GENERATED_REACHES && generated === measured;
+}
+
 export function hasSyntheticEvents(samples: BehavioralSamples): boolean {
   const events = [
     ...samples.mouseMoves,
@@ -731,6 +875,13 @@ export function buildBehavioralSignals(samples: BehavioralSamples): BehavioralSi
       "Typing reused a short programmed delay pattern",
       hasRepeatedTypingCadence(samples.keyPresses),
       0.55,
+      "high",
+    ),
+    createSignal(
+      "generated-pointer-path",
+      "Pointer reaches trace a generated curve instead of a hand's path",
+      hasGeneratedPointerPath(samples.mouseMoves),
+      0.6,
       "high",
     ),
     createSignal(

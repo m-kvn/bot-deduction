@@ -11,6 +11,7 @@ import {
   hasLinearTapRhythm,
   hasLinearTouchMovement,
   hasLinearTyping,
+  hasGeneratedPointerPath,
   hasInjectedKeyInput,
   hasRepeatedTypingCadence,
   hasZeroJitterClicks,
@@ -1080,6 +1081,123 @@ describe("OS-level input injection", () => {
     });
     expect(result.signals.filter((signal) => signal.triggered).map((signal) => signal.id))
       .toContain("injected-key-input");
+    expect(result.isLegitClient).toBe(false);
+  });
+});
+
+describe("generated pointer paths", () => {
+  // The recipe every bypass script in the set uses: quadratic bezier, one random
+  // perpendicular bow, smoothstep easing, jitter on the curve parameter.
+  const bezierReach = (
+    from: [number, number],
+    to: [number, number],
+    startT: number,
+    bow: number,
+    seed = 1,
+  ) => {
+    const [x1, y1] = from;
+    const [x2, y2] = to;
+    const dist = Math.hypot(x2 - x1, y2 - y1);
+    const steps = Math.max(16, Math.min(48, Math.round(dist / 8)));
+    const px = -(y2 - y1) / dist;
+    const py = (x2 - x1) / dist;
+    const cx = (x1 + x2) / 2 + px * bow;
+    const cy = (y1 + y2) / 2 + py * bow;
+    let random = seed;
+    const next = () => {
+      random = (random * 1103515245 + 12345) % 2147483648;
+      return random / 2147483648;
+    };
+    const points = [];
+    for (let i = 1; i <= steps; i += 1) {
+      const t = i / steps;
+      const te = Math.min(1, Math.max(0, t * t * (3 - 2 * t) + (next() - 0.5) * 0.05));
+      const u = 1 - te;
+      points.push({
+        x: u * u * x1 + 2 * u * te * cx + te * te * x2,
+        y: u * u * y1 + 2 * u * te * cy + te * te * y2,
+        t: startT + i * 14,
+        isTrusted: true,
+      });
+    }
+    return points;
+  };
+
+  // The same reach with tremor and a corrective sub-movement at the end, which is
+  // what pushes a hand back and forth across any smooth arc.
+  const handReach = (
+    from: [number, number],
+    to: [number, number],
+    startT: number,
+    bow: number,
+    seed = 7,
+  ) => {
+    let random = seed;
+    const next = () => {
+      random = (random * 1103515245 + 12345) % 2147483648;
+      return random / 2147483648;
+    };
+    return bezierReach(from, to, startT, bow, seed).map((point, index, all) => {
+      const overshoot = index > all.length - 5 ? (next() - 0.35) * 7 : 0;
+      return {
+        ...point,
+        x: point.x + (next() - 0.5) * 5 + overshoot,
+        y: point.y + (next() - 0.5) * 5,
+      };
+    });
+  };
+
+  const session = (build: typeof bezierReach) => [
+    ...build([200, 200], [800, 620], 0, 60),
+    ...build([800, 620], [260, 700], 3_000, -45),
+    ...build([260, 700], [900, 240], 6_000, 70),
+    ...build([900, 240], [350, 500], 9_000, -55),
+  ];
+
+  it("flags a session of generated bezier reaches", () => {
+    expect(hasGeneratedPointerPath(session(bezierReach))).toBe(true);
+  });
+
+  it("leaves a hand with tremor and end corrections alone", () => {
+    expect(hasGeneratedPointerPath(session(handReach))).toBe(false);
+  });
+
+  it("needs several reaches to agree", () => {
+    expect(hasGeneratedPointerPath(bezierReach([200, 200], [800, 620], 0, 60))).toBe(false);
+  });
+
+  it("does not fire when one reach in the run looks like a hand", () => {
+    expect(
+      hasGeneratedPointerPath([
+        ...bezierReach([200, 200], [800, 620], 0, 60),
+        ...bezierReach([800, 620], [260, 700], 3_000, -45),
+        ...handReach([260, 700], [900, 240], 6_000, 70),
+      ]),
+    ).toBe(false);
+  });
+
+  it("ignores short drags that carry no readable shape", () => {
+    const tiny = [0, 1, 2].flatMap((index) =>
+      bezierReach([200, 200], [230, 210], index * 3_000, 5),
+    );
+    expect(hasGeneratedPointerPath(tiny)).toBe(false);
+  });
+
+  it("ignores untrusted pointer samples", () => {
+    const untrusted = session(bezierReach).map((point) => ({ ...point, isTrusted: false }));
+    expect(hasGeneratedPointerPath(untrusted)).toBe(false);
+  });
+
+  it("scores a generated path as an agent through the public API", () => {
+    const result = analyzeBehavioralSamples({
+      mouseMoves: session(bezierReach),
+      scrolls: [],
+      keyPresses: [],
+      clicks: [],
+      observationMs: 15_000,
+    });
+    expect(result.signals.filter((signal) => signal.triggered).map((signal) => signal.id))
+      .toContain("generated-pointer-path");
     expect(result.isLegitClient).toBe(false);
   });
 });
