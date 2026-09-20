@@ -2,7 +2,7 @@
 
 Every case below was executed against the current build on `http://localhost:8799`, and every verdict
 was read back from `GET /api/submissions`, not from the screen. Scripts are the red team's own, run
-unmodified, from `a local bot-signal-bypass folder kept outside this repo`.
+unmodified, from a local `bot-signal-bypass/` folder kept outside this repo.
 
 | # | Method | Verdict | Score | Outcome | Decisive signals |
 |---|---|:---:|:---:|:---:|---|
