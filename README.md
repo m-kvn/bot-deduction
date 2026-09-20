@@ -241,10 +241,27 @@ it, displayed it, and never read it. Corroboration across layers is the thing wo
 rule requires at least two layers to have contributed rather than letting one noisy environment
 signal carry a verdict (`AGGREGATE_SCORE_THRESHOLD`, `MIN_CORROBORATING_LAYERS`).
 
-The cost is stated plainly: a real person on a corporate VPN, with no webcam, moving a trackpad in
-straight lines scores 0.659 across three layers and is now flagged. Raising the threshold trades that
-back for the spread-evidence attack. The decision is isolated in `verdict.mjs` and
-`verdict_check.mjs` prints the table for any threshold you set.
+Not every 0.30 carries the same weight. "This desktop has no webcam" and "this address is a
+datacenter" describe an environment millions of real people are sitting in; "every click released on
+the pixel it pressed" describes how the input was produced. So the bar depends on the kind of
+evidence: **0.5 when at least one behavioral or client signal contributed, 0.6 when the evidence is
+environmental only** (`AGGREGATE_BEHAVIORAL_THRESHOLD`, `AGGREGATE_SCORE_THRESHOLD`).
+
+The cost is stated plainly, because it is not small. Two combinations that are real people get
+flagged:
+
+| Session | score | verdict |
+|---|---|---|
+| VPN + no webcam + straight trackpad paths | 0.659 | 🔴 agent |
+| Trackpad tap-to-click user on a desktop with no webcam | 0.510 | 🔴 agent |
+
+The second is the sharp one: tap-to-click produces short-dwell, zero-movement presses, which is
+exactly what `zero-jitter-clicks` looks for, and a desktop without a webcam is ordinary. That session
+is **numerically identical** to a reported bypass run — 0.30 instant, 0.30 behavioral, 0.51 combined.
+No threshold separates them, because the difference is not in the score.
+
+The decision is isolated in `verdict.mjs`; `verdict_check.mjs` prints the full table for any
+threshold you set, so the trade can be moved with its consequences visible rather than guessed at.
 
 1. **Instant (browser)** — headless markers, `navigator.webdriver`, automation globals (Playwright,
    Puppeteer, Selenium, CDP), implausible screen geometry, tampered navigator getters.
