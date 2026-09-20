@@ -4,7 +4,7 @@ A self-hosted contact form that decides, per submission, whether it was filled i
 by an **agent / bot** — with no auth, no CAPTCHA, no third-party API and no outbound network calls at
 request time. Every signal is computed locally from the browser and from the HTTP request itself.
 
-Latest verified run: **82/82 harness tests, 400 unit tests, 30 crosscheck cases**, and **66/66
+Latest verified run: **84/84 harness tests, 400 unit tests, 30 crosscheck cases**, and **66/66
 agent-driven submissions in the harness matrix are classified as AGENT** — including a real PowerShell `SendInput` session driving a live
 Chrome window. That is a rate over the attacks in the matrix, not a claim of completeness: an
 independent red team passed four methods it does not contain (see **Known-open vectors** below).
@@ -28,7 +28,7 @@ Reports live in `Test_Report/`.
 │     ├─ bots/                      # scripted + browser bot simulators
 │     └─ public/                    # index.html (form), dashboard.html, app.js, styles.css
 └─ Test_Report/
-   ├─ run_tests.mjs                 # 82-case end-to-end harness (Patchright + direct HTTP)
+   ├─ run_tests.mjs                 # 84-case end-to-end harness (Patchright + direct HTTP)
    ├─ probe/                        # OS input-injection measurement + replay tooling
    ├─ generate_agent_detection_report.mjs
    ├─ results.json                  # raw results of the last run
@@ -323,6 +323,35 @@ inert, not counted as a fix.
 vectors produce genuinely trusted events, a real page load and human-grade input, so the samples the
 server recomputes are honest samples of real input. Detection has no client-side signal left to add.
 
+### Proof of work
+
+Every challenge carries a hash puzzle: find a nonce where `sha256(prefix:nonce)` has N leading zero
+bits. At the base 16 bits that is ~0.12s on a synchronous SHA-256 (`crypto.subtle` is unusable here —
+one promise per digest makes 65k hashes take longer than ten seconds). A person pays it once.
+
+Difficulty escalates only *past* the point the volume controls already consider abusive, so a busy
+shared office address is not progressively punished:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `POW_BASE_DIFFICULTY` | 16 | ~0.12 s — what everyone pays |
+| `POW_ESCALATION_BITS` | 2 | added per submission beyond `MAX_SUBMISSIONS_PER_IP` |
+| `POW_MAX_DIFFICULTY` | 22 | ~7.5 s ceiling |
+
+### Telemetry beacons — forced real-time execution
+
+The page posts a beacon to `/api/telemetry` every two seconds. Each reply carries the nonce the next
+beacon must quote, so the stream is a chain rather than a set of independent posts, and **the server
+timestamps every link on its own clock**.
+
+At submit, a claimed observation window must be matched by the session having demonstrably reported
+across it (`observed ≥ claimed × 0.5 − slack`). There is no fixed minimum beacon count: a page that
+submits in three seconds owes almost nothing, while one claiming half a minute of watching has to
+have been alive and reporting for most of it. That turns "author a history offline, sleep, POST it"
+into "keep a live session emitting a consistent chain" — most of the way to just running a browser.
+
+Tunable via `TELEMETRY_INTERVAL_MS`, `TELEMETRY_COVERAGE`, `TELEMETRY_STALE_MS`.
+
 ### Volume and repetition controls
 
 What those vectors cannot hide is repetition: a hand fills this form once, a loop fills it all
@@ -359,7 +388,7 @@ node examples/form-demo/crosscheck.mjs     # 30 server-detection cases
 
 npx patchright install chromium            # once, for the browser harness
 cd ../Test_Report
-node run_tests.mjs                         # 82 end-to-end cases -> results.json
+node run_tests.mjs                         # 84 end-to-end cases -> results.json
 node generate_agent_detection_report.mjs   # -> HTML + PDF report
 ```
 
