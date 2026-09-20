@@ -42,6 +42,11 @@ const MAX_SAMPLES = {
 // tick, both of which make an honest observation window look marginally long.
 const OBSERVATION_SLACK_MS = 2_000;
 
+// The collector stamps every sample with `Date.now()`, so an honest stream is in
+// epoch milliseconds. A stream authored from scratch tends to start near zero
+// because it was generated relative to itself.
+const MIN_EPOCH_MS = 1_600_000_000_000;
+
 // How far the page's own behavioral score may sit from the server's recomputation
 // before the difference reads as tampering rather than rounding.
 const SCORE_MISMATCH_TOLERANCE = 0.05;
@@ -806,6 +811,23 @@ async function handleSubmit(req, res) {
   const { session: pageSession } = currentPageSession(req);
   const sessionAgeMs = pageSession ? Date.now() - pageSession.startedAt : undefined;
   const observationReasons = [];
+
+  if (samples) {
+    const stamps = [
+      ...samples.mouseMoves,
+      ...samples.scrolls,
+      ...samples.keyPresses,
+      ...samples.clicks,
+      ...samples.touches,
+      ...samples.buttons,
+    ].map((sample) => sample.t);
+    const earliest = stamps.length > 0 ? Math.min(...stamps) : undefined;
+    if (earliest !== undefined && earliest < MIN_EPOCH_MS) {
+      observationReasons.push(
+        `sample timestamps are not wall-clock times (earliest ${earliest})`,
+      );
+    }
+  }
 
   // Durations on both sides, never absolute timestamps — a visitor whose clock is
   // wrong is still a visitor, but nobody can watch a page for longer than the page

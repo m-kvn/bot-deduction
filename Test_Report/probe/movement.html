@@ -1,0 +1,17 @@
+<!doctype html><html><head><title>BSMOVE-WINDOW</title></head>
+<body style="margin:0;height:100vh;background:#111;color:#eee;font:14px monospace">
+<pre id="out">ready</pre>
+<script>
+window.__m = [];
+addEventListener('pointermove', function (e) {
+  if (e.pointerType !== 'mouse') return;
+  var co = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+  window.__m.push([e.movementX, e.movementY, e.pressure, co.length, Math.round(e.clientX), Math.round(e.clientY)]);
+  document.documentElement.dataset.m = JSON.stringify(window.__m);
+  document.getElementById('out').textContent = 'moves: ' + window.__m.length;
+}, true);
+addEventListener('pointerdown', function (e) {
+  window.__m.push(['DOWN', e.movementX, e.movementY, e.pressure, e.pointerType]);
+  document.documentElement.dataset.m = JSON.stringify(window.__m);
+}, true);
+</script></body></html>

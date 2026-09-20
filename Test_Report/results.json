@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-20T10:03:02.587Z",
+  "generatedAt": "2026-09-20T10:52:41.219Z",
   "target": "http://localhost:8787/index.html",
   "isolatedTarget": "http://127.0.0.1:8877",
   "browser": "Google Chrome via Patchright (headful) plus Patchright Chromium (headless)",
@@ -730,9 +730,9 @@
       "name": "Synthetic uniform scrolling",
       "vector": "Eight equal untrusted wheel events at equal cadence",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.9",
+      "actual": "AGENT, score 0.93",
       "passed": true,
-      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events",
+      "evidence": "HTTP 403; signals: client:untrusted-form-interaction, behavioral:synthetic-events, behavioral:linear-scroll",
       "severity": ""
     },
     {
@@ -864,7 +864,7 @@
       "expected": "AGENT",
       "actual": "AGENT, score 1",
       "passed": true,
-      "evidence": "HTTP 403; signals: instant:isHeadless, server:bot-user-agent, client:untrusted-form-interaction, instant:isUserAgentValid, instant:isSoftwareRenderer, instant:isNotificationPermissionInconsistent, instant:isMissingChromeObject, instant:isSuspiciousWindowDimensions, instant:isShaderF16Supported, instant:isEmptyPlugins, instant:isZeroConnectionRtt",
+      "evidence": "HTTP 403; signals: instant:isHeadless, server:bot-user-agent, instant:isUserAgentValid, instant:isSoftwareRenderer, instant:isNotificationPermissionInconsistent, instant:isMissingChromeObject, instant:isSuspiciousWindowDimensions, instant:isShaderF16Supported, instant:isEmptyPlugins, instant:isZeroConnectionRtt",
       "severity": ""
     },
     {
