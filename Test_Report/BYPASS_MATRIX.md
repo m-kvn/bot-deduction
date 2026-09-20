@@ -58,3 +58,46 @@ If the human median lands clearly above ~2 px the thresholds in
 `bot-signal/src/behavioral/analysis.ts` (`MAX_GENERATED_ARC_RESIDUAL`, `MIN_ARC_EXCURSION_PX`) can be
 opened up to match. If it does not, the metric does not separate hand from Bézier on this hardware
 and should be removed.
+
+---
+
+## Round 2 — reverse-API forge, and the scraping toolkit
+
+A second round added a forger that reads the detector bundle and **authors a clean synthetic sample
+stream** rather than a summary, defeating the server-side recomputation by giving it honest-looking
+data to re-score. Measured against the current build:
+
+| Case | Method | Before | Now |
+|---|---|:---:|:---:|
+| `reverse_samples.py` | replay + forged sample stream | 🟢 human 0.00 | 🔴 **agent 0.999** |
+| `reverse_samples_httpx.py` | same, async httpx transport | 🟢 human 0.00 | 🔴 **agent 0.999** |
+| `pw_test.py` | Playwright headless | 🔴 agent 1.00 | 🔴 agent 1.00 |
+| `cdp_probe.py` (#15) | `navigator.platform` spoof | 🔴 agent 0.93 | 🔴 agent 0.93 |
+| `cdp_probe.py` (#8) | XHR interception | recon only | recon only |
+
+Closed by three additions, all local:
+
+1. **Proof of work** — every challenge carries a hash puzzle (16 bits ≈ 0.12 s, escalating past the
+   abuse threshold to a 22-bit ceiling). The forger sends no nonce.
+2. **Nonce-chained telemetry beacons** — the page reports every 2 s and the server timestamps each
+   arrival on its own clock, so a claimed observation window must be matched by the session having
+   actually reported across it. The forger sleeps in front of an offline-authored history and
+   produces `0ms across 0 beacons`.
+3. **Wall-clock sample timestamps** — the collector stamps `Date.now()`; an authored stream starts
+   near zero.
+
+On the 15-technique scraping toolkit the conclusion is unchanged and worth stating plainly: transport,
+DOM parsing, boilerplate removal, structured data, caching and markdown conversion **do not move the
+verdict at all** on a form-submission target. Fingerprint automation (#2) and spoofing (#15) actively
+hurt the attacker; UA/IP rotation (#14) breaks the IP+UA-pinned session. The verdict is decided by the
+sample stream and the session gates, not by how the page is fetched or parsed.
+
+**Note on #8.** Wire interception now also reveals `POST /api/telemetry`. The beacon protocol is not
+secret and can be replicated — doing so costs the attacker a live, stateful session emitting a valid
+nonce chain across real wall-clock time, which is the intended price, not an accident.
+
+## Still open, unchanged
+
+C4, C6, C7 and C8 drive the real page, so the page solves the proof of work and beacons on their
+behalf. Nothing in round 2 touches them, and nothing is expected to: they submit genuine samples of
+input a browser cannot distinguish from a hand's.
