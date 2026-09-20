@@ -145,3 +145,43 @@ here.
 
 **Still open:** C4, C6, C7, C8 — genuine trusted input, driven through the real page, typed character
 by character. They do not use bulk insertion, so this check does not touch them.
+
+---
+
+## Round 4 — spreading evidence across layers
+
+A run was reported that scored **human at 0.681**: trusted CDP input through patchright with
+`--disable-blink-features=AutomationControlled`, bezier pointer paths with overshoot-and-correct,
+human typing cadence with deliberate typos corrected by Backspace, Shift-as-three-events capitals,
+off-centre clicks, and fingerprint patches confined to surfaces the detector does not scan for
+native-function tampering. It had read the detector and patched only the blind spots.
+
+Its three surviving tells were 0.30 instant, 0.30 behavioral and 0.35 server — **one per layer, every
+one under the 0.5 bar**. The combined `1 − Π(1 − sᵢ) = 0.681` was computed, recorded and displayed,
+and `server.mjs` never read it. Three independent pieces of evidence produced a confident "human".
+
+The verdict now acts on the combined score when more than one layer contributed, with the bar set by
+the kind of evidence: **0.5 when a behavioral or client signal is among it, 0.6 when it is purely
+environmental**. "This desktop has no webcam" describes a machine millions of people use; "every
+click released on the pixel it pressed" describes how the input was produced.
+
+Reproduced end to end in `probe/spread_evidence.mjs` rather than only testing the numbers:
+
+| Run | Result |
+|---|---|
+| A — the technique as described | 🔴 **agent 0.545, rejected** — `isWorkerWebGLInconsistent` 0.35 + `zero-jitter-clicks` 0.30, neither layer over its own threshold |
+| B — same, with the two "cheap to close" tells fixed | 🟢 **human 0.00, no signals**, `review` on repetition only |
+
+Run B is the honest result. Drifting the pointer 1–2px between `mouse.down()` and `mouse.up()`, and
+dropping the fingerprint patch altogether, produces a session with **no evidence to aggregate** — 125
+mouse moves, 141 keystrokes, 5 clicks, zero synthetic events, 37 seconds of observation, all genuinely
+trusted. There is no threshold that catches an absence of evidence.
+
+So the aggregate rule closes the spread-evidence gap; it does not close the technique. That is the
+same wall as C4/C6/C7/C8 approached from a different direction, and what stopped Run B was the
+repetition controls, not detection.
+
+**Cost of the rule, measured.** A trackpad tap-to-click user on a desktop without a webcam scores
+0.30 instant + 0.30 behavioral = 0.510 — numerically identical to a reported bypass run. Tap-to-click
+produces the short-dwell, zero-movement presses `zero-jitter-clicks` looks for. `verdict_check.mjs`
+prints the table for any threshold; the decision lives in `verdict.mjs`.
