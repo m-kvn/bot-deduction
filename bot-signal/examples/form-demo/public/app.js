@@ -167,6 +167,28 @@ function slim(result) {
   };
 }
 
+const SAMPLE_LIMITS = {
+  mouseMoves: 600,
+  scrolls: 200,
+  keyPresses: 400,
+  clicks: 60,
+  touches: 200,
+  buttons: 120,
+};
+
+function slimSamples(samples) {
+  const take = (stream, limit) => (Array.isArray(stream) ? stream.slice(-limit) : []);
+  return {
+    mouseMoves: take(samples.mouseMoves, SAMPLE_LIMITS.mouseMoves),
+    scrolls: take(samples.scrolls, SAMPLE_LIMITS.scrolls),
+    keyPresses: take(samples.keyPresses, SAMPLE_LIMITS.keyPresses),
+    clicks: take(samples.clicks, SAMPLE_LIMITS.clicks),
+    touches: take(samples.touches, SAMPLE_LIMITS.touches),
+    buttons: take(samples.buttons, SAMPLE_LIMITS.buttons),
+    observationMs: samples.observationMs,
+  };
+}
+
 function slimBehavioral(result) {
   return {
     suspicionScore: result.suspicionScore,
@@ -255,6 +277,7 @@ form.addEventListener("submit", async (event) => {
     client: {
       instant: slim(instant),
       behavioral: slimBehavioral(behavioralResult),
+      samples: slimSamples(detector.getSamples()),
       userAgent: navigator.userAgent,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       language: navigator.language,

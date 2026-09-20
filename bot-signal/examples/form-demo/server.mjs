@@ -4,6 +4,7 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { detectServerClientAsync, preloadIpLists } from "../../dist/server.js";
+import { analyzeBehavioralSamples } from "../../dist/index.js";
 import {
   clearSubmissions,
   countByVerdict,
@@ -25,6 +26,25 @@ const MIN_INTERACTION_OBSERVATION_MS = 500;
 const MAX_SUBMIT_INTENT_AGE_MS = 5_000;
 const MIN_INJECTED_KEY_EVENTS = 5;
 const INJECTED_KEY_EVENT_RATIO = 0.6;
+
+// Caps on the raw sample streams the page submits, so recomputation stays cheap
+// and a client cannot turn the audit trail into a memory attack.
+const MAX_SAMPLES = {
+  mouseMoves: 600,
+  scrolls: 200,
+  keyPresses: 400,
+  clicks: 60,
+  touches: 200,
+  buttons: 120,
+};
+
+// Clock drift and the gap between the document response and the detector's first
+// tick, both of which make an honest observation window look marginally long.
+const OBSERVATION_SLACK_MS = 2_000;
+
+// How far the page's own behavioral score may sit from the server's recomputation
+// before the difference reads as tampering rather than rounding.
+const SCORE_MISMATCH_TOLERANCE = 0.05;
 const TRUST_EDGE_HEADERS = process.env.TRUST_EDGE_HEADERS === "1";
 const CONFIDENCE_LEVELS = new Set(["low", "medium", "high"]);
 const challenges = new Map();
@@ -418,6 +438,138 @@ function validateInteraction(interaction) {
   return reasons;
 }
 
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Rebuilds the raw sample streams from an untrusted payload: wrong types are
+ * dropped rather than coerced, and each stream keeps only its most recent
+ * entries. Returns `null` only when no sample object was sent at all, which is
+ * itself a finding — the page always sends one.
+ */
+function sanitizeSamples(raw) {
+  if (!isObject(raw)) return null;
+
+  const stream = (value, limit, map) => {
+    if (!Array.isArray(value)) return [];
+    return value
+      .slice(-limit)
+      .map((entry) => (isObject(entry) ? map(entry) : null))
+      .filter((entry) => entry !== null && finiteNumber(entry.t) !== undefined);
+  };
+
+  const point = (entry) => ({
+    x: finiteNumber(entry.x) ?? 0,
+    y: finiteNumber(entry.y) ?? 0,
+    movementX: finiteNumber(entry.movementX),
+    movementY: finiteNumber(entry.movementY),
+    pageX: finiteNumber(entry.pageX),
+    pageY: finiteNumber(entry.pageY),
+    screenX: finiteNumber(entry.screenX),
+    screenY: finiteNumber(entry.screenY),
+    isFullscreen: entry.isFullscreen === true,
+    t: finiteNumber(entry.t),
+    isTrusted: entry.isTrusted === true,
+  });
+
+  const samples = {
+    mouseMoves: stream(raw.mouseMoves, MAX_SAMPLES.mouseMoves, point),
+    scrolls: stream(raw.scrolls, MAX_SAMPLES.scrolls, (entry) => ({
+      deltaY: finiteNumber(entry.deltaY) ?? 0,
+      t: finiteNumber(entry.t),
+      isTrusted: entry.isTrusted === true,
+    })),
+    keyPresses: stream(raw.keyPresses, MAX_SAMPLES.keyPresses, (entry) => ({
+      t: finiteNumber(entry.t),
+      isTrusted: entry.isTrusted === true,
+      repeat: entry.repeat === true,
+      code: typeof entry.code === "string" ? entry.code.slice(0, 32) : undefined,
+      keyCode: finiteNumber(entry.keyCode),
+      printable: entry.printable === true,
+      composing: entry.composing === true,
+    })),
+    clicks: stream(raw.clicks, MAX_SAMPLES.clicks, (entry) => ({
+      ...point(entry),
+      detail: finiteNumber(entry.detail),
+    })),
+    touches: stream(raw.touches, MAX_SAMPLES.touches, (entry) => ({
+      t: finiteNumber(entry.t),
+      isTrusted: entry.isTrusted === true,
+      kind: entry.kind === "move" ? "move" : "start",
+      x: finiteNumber(entry.x),
+      y: finiteNumber(entry.y),
+    })),
+    buttons: stream(raw.buttons, MAX_SAMPLES.buttons, (entry) => ({
+      kind: entry.kind === "up" ? "up" : "down",
+      x: finiteNumber(entry.x) ?? 0,
+      y: finiteNumber(entry.y) ?? 0,
+      screenX: finiteNumber(entry.screenX),
+      screenY: finiteNumber(entry.screenY),
+      t: finiteNumber(entry.t),
+      isTrusted: entry.isTrusted === true,
+    })),
+    observationMs: finiteNumber(raw.observationMs) ?? 0,
+  };
+
+  // An empty-but-present set is honest reporting of a session with no input; the
+  // interaction gate already covers that. Only a missing `samples` object means
+  // the client declined to show its working, which is what `null` signals here.
+  return samples;
+}
+
+/**
+ * Compares what the page said about itself against what its own raw samples
+ * actually score. A page that reports a clean verdict it cannot derive is not a
+ * page the server should be taking a verdict from.
+ */
+function compareClaimedBehavioral(claimed, recomputed) {
+  if (!isObject(claimed)) return [];
+
+  const reasons = [];
+  const claimedScore = finiteNumber(claimed.suspicionScore);
+
+  if (
+    claimedScore === undefined ||
+    Math.abs(claimedScore - recomputed.suspicionScore) > SCORE_MISMATCH_TOLERANCE
+  ) {
+    reasons.push(
+      `reported score ${claimedScore ?? "none"} but its samples score ${recomputed.suspicionScore.toFixed(2)}`,
+    );
+  }
+
+  const recomputedIds = new Set(
+    recomputed.signals.filter((signal) => signal.triggered).map((signal) => signal.id),
+  );
+  const claimedIds = new Set(
+    (Array.isArray(claimed.signals) ? claimed.signals : [])
+      .filter((signal) => isObject(signal) && typeof signal.id === "string")
+      .map((signal) => signal.id),
+  );
+  const dropped = [...recomputedIds].filter((id) => !claimedIds.has(id));
+
+  if (dropped.length > 0) {
+    reasons.push(`withheld triggered signals: ${dropped.join(", ")}`);
+  }
+
+  const counts = isObject(claimed.sampleCounts) ? claimed.sampleCounts : {};
+  const actual = {
+    mouseMoves: recomputed.sampleCounts.mouseMoves,
+    keyPresses: recomputed.sampleCounts.keyPresses,
+    clicks: recomputed.sampleCounts.clicks,
+  };
+  for (const [key, value] of Object.entries(actual)) {
+    const reported = finiteNumber(counts[key]);
+    // Streams are capped and windowed, so a report may legitimately exceed what
+    // arrived; claiming fewer events than were sent cannot happen honestly.
+    if (reported !== undefined && reported < value) {
+      reasons.push(`reported ${reported} ${key} but sent ${value}`);
+    }
+  }
+
+  return reasons;
+}
+
 function pruneChallenges(now = Date.now()) {
   for (const [token, challenge] of challenges) {
     if (challenge.expiresAt <= now) challenges.delete(token);
@@ -537,7 +689,19 @@ async function handleSubmit(req, res) {
   const client = isObject(payload.client) ? payload.client : {};
   const form = cleanForm(isObject(payload.form) ? payload.form : {});
   const instant = client.instant ?? null;
-  const behavioral = client.behavioral ?? null;
+  const claimedBehavioral = client.behavioral ?? null;
+
+  // The page's own behavioral verdict is advisory. Recompute it here from the raw
+  // samples so a forged `{score: 0, signals: []}` buys nothing, and keep the
+  // recomputed object as the one that decides.
+  const samples = sanitizeSamples(client.samples);
+  const recomputed = samples
+    ? analyzeBehavioralSamples(samples, BEHAVIORAL_SCORE_THRESHOLD)
+    : null;
+  const behavioral = recomputed ?? claimedBehavioral;
+  const claimMismatchReasons = recomputed
+    ? compareClaimedBehavioral(claimedBehavioral, recomputed)
+    : [];
 
   const instantValid = validateClientLayer(instant, INSTANT_SCORE_THRESHOLD, "instant");
   const behavioralValid = validateClientLayer(
@@ -546,6 +710,25 @@ async function handleSubmit(req, res) {
     "behavioral",
   );
   const missingClientLayer = !instant || !behavioral;
+  const { session: pageSession } = currentPageSession(req);
+  const sessionAgeMs = pageSession ? Date.now() - pageSession.startedAt : undefined;
+  const observationReasons = [];
+
+  // Durations on both sides, never absolute timestamps — a visitor whose clock is
+  // wrong is still a visitor, but nobody can watch a page for longer than the page
+  // has existed.
+  if (sessionAgeMs !== undefined) {
+    for (const [label, claimed] of [
+      ["behavioral", finiteNumber(behavioral?.observationMs)],
+      ["interaction", finiteNumber(client.interaction?.observationMs)],
+    ]) {
+      if (claimed !== undefined && claimed > sessionAgeMs + OBSERVATION_SLACK_MS) {
+        observationReasons.push(
+          `${label} claims ${Math.round(claimed)}ms of observation in a ${Math.round(sessionAgeMs)}ms page session`,
+        );
+      }
+    }
+  }
   const invalidClientLayer = !missingClientLayer && (!instantValid || !behavioralValid);
   const interactionReasons = validateInteraction(client.interaction);
   const provenanceReasons = validateRequestProvenance(req);
@@ -590,6 +773,30 @@ async function handleSubmit(req, res) {
       clientSignal(
         "invalid-page-session",
         `Submission was not preceded by a genuine page load: ${pageSessionReasons.join("; ")}`,
+      ),
+    );
+  }
+  if (!samples && !missingClientLayer) {
+    clientSignals.push(
+      clientSignal(
+        "missing-behavioral-samples",
+        "Submission reported a behavioral verdict without the samples it was derived from",
+      ),
+    );
+  }
+  if (claimMismatchReasons.length > 0) {
+    clientSignals.push(
+      clientSignal(
+        "forged-client-verdict",
+        `Reported browser verdict did not match its own samples: ${claimMismatchReasons.join("; ")}`,
+      ),
+    );
+  }
+  if (observationReasons.length > 0) {
+    clientSignals.push(
+      clientSignal(
+        "impossible-observation-window",
+        `Client evidence outlived its page session: ${observationReasons.join("; ")}`,
       ),
     );
   }

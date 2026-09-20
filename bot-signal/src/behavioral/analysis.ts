@@ -33,7 +33,7 @@ const INJECTED_KEY_RATIO = 0.6;
 /** `VK_PACKET` — the virtual key Windows reports for `KEYEVENTF_UNICODE` input. */
 const VK_PACKET = 231;
 
-/** Primary-button holds shorter than this are too quick to expect hand tremor. */
+/** Below this a press is too quick for a finger to have lifted it. */
 const MIN_CLICK_HOLD_MS = 40;
 
 /** How many zero-jitter clicks must stack up before the run means anything. */
@@ -574,12 +574,12 @@ export function hasInjectedKeyInput(keyPresses: KeySample[]): boolean {
 }
 
 /**
- * Detects primary-button presses that never moved a single pixel while held.
+ * Detects primary-button presses that no hand produced.
  *
  * `mouse_event(MOUSEEVENTF_LEFTDOWN)` followed by `MOUSEEVENTF_LEFTUP` releases
- * on the exact coordinate it pressed. A hand resting on a mouse drifts, so a run
- * of presses held tens of milliseconds with byte-identical down and up positions
- * and no movement in between points at injected clicks.
+ * on the exact coordinate it pressed, and a scripted clicker often releases
+ * within a few milliseconds. A hand resting on a mouse drifts, and takes tens of
+ * milliseconds to lift, so a run of presses that does neither points at injection.
  *
  * Supporting evidence only: a steady hand on a low-DPI mouse can do this once or
  * twice, so this never decides a verdict on its own.
@@ -595,7 +595,7 @@ export function hasZeroJitterClicks(
     return false;
   }
 
-  let zeroJitter = 0;
+  let inhuman = 0;
   let measured = 0;
 
   for (let index = 1; index < presses.length; index += 1) {
@@ -606,14 +606,9 @@ export function hasZeroJitterClicks(
       continue;
     }
 
-    const heldMs = up.t - down.t;
-
-    if (heldMs < MIN_CLICK_HOLD_MS) {
-      continue;
-    }
-
     measured += 1;
 
+    const heldMs = up.t - down.t;
     const movedWhileHeld = mouseMoves.some(
       (move) => move.isTrusted && move.t > down.t && move.t < up.t,
     );
@@ -623,12 +618,15 @@ export function hasZeroJitterClicks(
       up.screenX === down.screenX &&
       up.screenY === down.screenY;
 
-    if (samePoint && !movedWhileHeld) {
-      zeroJitter += 1;
+    // Two ways a press reads as machine-made: it releases on the pixel it
+    // pressed, or it is gone before a finger could lift. Skipping the quick ones
+    // entirely, as this check used to, just told a synthetic clicker to hurry.
+    if (heldMs < MIN_CLICK_HOLD_MS || (samePoint && !movedWhileHeld)) {
+      inhuman += 1;
     }
   }
 
-  return measured >= MIN_ZERO_JITTER_CLICKS && zeroJitter === measured;
+  return measured >= MIN_ZERO_JITTER_CLICKS && inhuman === measured;
 }
 
 export function hasSyntheticEvents(samples: BehavioralSamples): boolean {
@@ -744,7 +742,7 @@ export function buildBehavioralSignals(samples: BehavioralSamples): BehavioralSi
     ),
     createSignal(
       "zero-jitter-clicks",
-      "Every measured click released on the exact pixel it pressed",
+      "Every measured click released on the exact pixel it pressed, or too fast to be a finger",
       hasZeroJitterClicks(samples.buttons, samples.mouseMoves),
       0.3,
       "medium",

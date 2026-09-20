@@ -1040,12 +1040,25 @@ describe("OS-level input injection", () => {
     expect(hasZeroJitterClicks(buttons, [])).toBe(false);
   });
 
-  it("ignores flicks too quick to expect tremor", () => {
-    const buttons = [0, 1_000, 2_000].flatMap((base) => [
+  it("flags a clicker that releases faster than a finger could lift", () => {
+    const buttons = [0, 1_000, 2_000].flatMap((base, index) => [
       press(base, 400, 300, "down"),
-      press(base + 12, 400, 300, "up"),
+      press(base + 12, 400 + index, 301, "up"),
     ]);
-    expect(hasZeroJitterClicks(buttons, [])).toBe(false);
+    expect(hasZeroJitterClicks(buttons, [])).toBe(true);
+  });
+
+  it("leaves a run alone when any press looks like a hand", () => {
+    const buttons = [
+      press(0, 400, 300, "down"),
+      press(12, 400, 300, "up"),
+      press(1_000, 400, 300, "down"),
+      press(1_080, 401, 301, "up"),
+      press(2_000, 400, 300, "down"),
+      press(2_012, 400, 300, "up"),
+    ];
+    const moves = [{ x: 401, y: 301, t: 1_040, isTrusted: true }];
+    expect(hasZeroJitterClicks(buttons, moves)).toBe(false);
   });
 
   it("does not flag a hold that moved the pointer", () => {

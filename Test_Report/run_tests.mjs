@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "../bot-signal/node_modules/patchright/index.mjs";
 
@@ -134,6 +135,27 @@ function cleanClient(overrides = {}) {
     platform: "Win32",
     ...overrides,
   };
+}
+
+// node:fetch refuses to send some Sec-* request headers, so a page-load replay
+// cannot be expressed with it. The attacker's urllib/curl client has no such
+// restriction, so the harness uses the raw client too.
+function rawRequest({ method = "GET", path, headers = {}, body }) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      { host: "127.0.0.1", port, path, method, headers },
+      (res) => {
+        let text = "";
+        res.on("data", (chunk) => (text += chunk));
+        res.on("end", () =>
+          resolve({ status: res.statusCode, headers: res.headers, text }),
+        );
+      },
+    );
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
 }
 
 async function apiSubmit(payload, headers = browserHeaders) {
@@ -405,6 +427,156 @@ try {
     vector: "Direct client also spoofs same-origin Origin and Referer",
     expectedVerdict: "agent",
     response: fullyForgedWithProvenance,
+    severity: "Critical",
+  });
+
+  // Full browser-session replay with no browser: the request order, Fetch
+  // Metadata and cookie jar of a real page load, then a fabricated clean verdict.
+  // This is the case that proved the client score was advisory.
+  const replayJar = new Map();
+  const replayCookieHeader = () =>
+    [...replayJar].map(([name, value]) => `${name}=${value}`).join("; ");
+  const replayFetch = async (path, headers) => {
+    const response = await rawRequest({
+      path,
+      headers: { ...headers, ...(replayJar.size ? { cookie: replayCookieHeader() } : {}) },
+    });
+    const setCookie = response.headers["set-cookie"]?.[0];
+    if (setCookie) {
+      const [pair] = setCookie.split(";");
+      const index = pair.indexOf("=");
+      replayJar.set(pair.slice(0, index).trim(), pair.slice(index + 1).trim());
+    }
+    return response;
+  };
+  const replaySubmit = async (payload, headers) => {
+    const body = JSON.stringify(payload);
+    const response = await rawRequest({
+      method: "POST",
+      path: "/api/submit",
+      headers: { ...headers, "content-length": Buffer.byteLength(body) },
+      body,
+    });
+    return { status: response.status, data: JSON.parse(response.text) };
+  };
+
+  await replayFetch("/index.html", {
+    ...browserHeaders,
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-dest": "document",
+    "sec-fetch-site": "none",
+  });
+  for (const [path, dest] of [
+    ["/styles.css", "style"],
+    ["/vendor/bot-signal.global.js", "script"],
+    ["/app.js", "script"],
+  ]) {
+    await replayFetch(path, {
+      ...browserHeaders,
+      "sec-fetch-mode": "no-cors",
+      "sec-fetch-dest": dest,
+      "sec-fetch-site": "same-origin",
+      referer: `${base}/index.html`,
+    });
+  }
+  const replayChallenge = JSON.parse(
+    (
+      await replayFetch("/api/challenge", {
+        ...browserHeaders,
+        referer: `${base}/index.html`,
+      })
+    ).text,
+  );
+  const replayHeaders = {
+    ...browserHeaders,
+    origin: base,
+    referer: `${base}/index.html`,
+    cookie: replayCookieHeader(),
+  };
+  const sessionReplay = await replaySubmit(
+    {
+      form: { name: "Session replay", email: "session-replay@example.test" },
+      challengeToken: replayChallenge.token,
+      client: cleanClient({ interaction: cleanInteraction() }),
+    },
+    replayHeaders,
+  );
+  await expectVerdict({
+    category: "API bypass",
+    name: "Full page-session replay with a fabricated clean verdict",
+    vector: "Scripted client replays the document, every subresource, the cookie and the challenge",
+    expectedVerdict: "agent",
+    response: sessionReplay,
+    severity: "Critical",
+  });
+
+  // Same replay, but claiming an observation window longer than the session has
+  // existed — a duration comparison the server makes without trusting any clock.
+  const windowChallenge = JSON.parse(
+    (await replayFetch("/api/challenge", { ...browserHeaders, referer: `${base}/index.html` })).text,
+  );
+  const impossibleWindow = await replaySubmit(
+    {
+      form: { name: "Impossible window", email: "impossible-window@example.test" },
+      challengeToken: windowChallenge.token,
+      client: cleanClient({
+        behavioral: { ...cleanBehavioral(), observationMs: 3_600_000 },
+        interaction: cleanInteraction({ observationMs: 3_600_000 }),
+        samples: { mouseMoves: [], scrolls: [], keyPresses: [], clicks: [], touches: [], buttons: [], observationMs: 3_600_000 },
+      }),
+    },
+    { ...replayHeaders, cookie: replayCookieHeader() },
+  );
+  await expectVerdict({
+    category: "API bypass",
+    name: "Claimed observation window outlives the page session",
+    vector: "Replayed session claims an hour of observation seconds after loading",
+    expectedVerdict: "agent",
+    response: impossibleWindow,
+    severity: "Critical",
+  });
+
+  // Samples that score badly, reported as a clean verdict: the server recomputes
+  // from the samples, so the reported number buys nothing.
+  const contradictoryChallenge = JSON.parse(
+    (await replayFetch("/api/challenge", { ...browserHeaders, referer: `${base}/index.html` })).text,
+  );
+  const roboticSamples = {
+    mouseMoves: Array.from({ length: 40 }, (_, index) => ({
+      x: 100 + index * 10,
+      y: 100 + index * 10,
+      t: 1_000 + index * 10,
+      isTrusted: true,
+    })),
+    scrolls: [],
+    keyPresses: Array.from({ length: 30 }, (_, index) => ({
+      t: 2_000 + index * 30,
+      isTrusted: true,
+      repeat: false,
+      printable: true,
+      composing: false,
+      code: "",
+      keyCode: 231,
+    })),
+    clicks: [],
+    touches: [],
+    buttons: [],
+    observationMs: 15_000,
+  };
+  const contradictory = await replaySubmit(
+    {
+      form: { name: "Contradictory samples", email: "contradictory@example.test" },
+      challengeToken: contradictoryChallenge.token,
+      client: cleanClient({ interaction: cleanInteraction(), samples: roboticSamples }),
+    },
+    { ...replayHeaders, cookie: replayCookieHeader() },
+  );
+  await expectVerdict({
+    category: "API bypass",
+    name: "Clean verdict reported over robotic samples",
+    vector: "Client reports score 0 while its own samples score high",
+    expectedVerdict: "agent",
+    response: contradictory,
     severity: "Critical",
   });
 

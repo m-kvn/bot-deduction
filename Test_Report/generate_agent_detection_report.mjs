@@ -185,10 +185,18 @@ const html = `<!doctype html>
       <div class="metric"><strong>${detectionCases.length}</strong><span>Classification tests</span></div>
       <div class="metric good"><strong>${detectedAgents.length}/${agentCases.length}</strong><span>Agents detected</span></div>
       <div class="metric bad"><strong>${missedAgents.length}</strong><span>Agents missed</span></div>
-      <div class="metric"><strong>${agentRecall}%</strong><span>Agent detection rate</span></div>
+      <div class="metric"><strong>${agentRecall}%</strong><span>Detection rate, this matrix</span></div>
     </div>
-    <div class="verdict"><strong>Corrected verdict: OBJECTIVE NOT FULLY MET.</strong><br>
-      Codex automation initiated all ${detectionCases.length} classification submissions, so every expected verdict is AGENT. The app detected ${detectedAgents.length} and incorrectly returned HUMAN for ${missedAgents.length}. The agent detection rate was ${agentRecall}% and the miss rate was ${missRate}%.</div>
+    <div class="verdict"><strong>Verdict: OBJECTIVE NOT FULLY MET.</strong><br>
+      Codex automation initiated all ${detectionCases.length} classification submissions, so every expected verdict is AGENT. The app detected ${detectedAgents.length} and incorrectly returned HUMAN for ${missedAgents.length}${
+        missedAgents.length === 0
+          ? " within this matrix"
+          : ""
+      }. ${
+        missedAgents.length === 0
+          ? "That is not the same as the objective being met: an independent red team has since passed four methods this matrix does not contain — OS-level injection with real scan codes, and a raw CDP <code>Input</code> client driving a normal Chrome build. Section 10 documents them. A detection rate is only ever a rate over the attacks you thought to write."
+          : `The agent detection rate was ${agentRecall}% and the miss rate was ${missRate}%.`
+      }</div>
     <div class="callout"><strong>Ground-truth correction:</strong> Human-like telemetry does not make the submitter human. All ${missedAgents.length} HUMAN results in this report are agent-detection failures because Codex, Patchright, Chrome DevTools MCP, JavaScript, or a direct-request harness generated the submission.</div>
     <table class="meta">
       <tr><td>Target</td><td><code>http://localhost:8787/index.html</code></td></tr>
@@ -196,6 +204,7 @@ const html = `<!doctype html>
       <tr><td>Test methods</td><td>Chrome DevTools MCP, Google Chrome through Patchright, headless Chromium, trusted browser input, DOM APIs, JavaScript events, direct HTTP, forged payloads, server headers/IP/TLS scenarios</td></tr>
       <tr><td>Agent detection accuracy</td><td>${detectedAgents.length}/${agentCases.length} = ${agentRecall}% across Codex-generated classification attempts</td></tr>
       <tr><td>Genuine-human sessions</td><td>0 — false-positive performance was not measured by this automated run</td></tr>
+      <tr><td>Known-open vectors</td><td>4 — see section 10; not represented in the matrix below</td></tr>
       <tr><td>Execution date</td><td>${escapeHtml(generated)}</td></tr>
       <tr><td>Live-data safety</td><td>Existing live dashboard records were not changed; mutating tests used an in-memory instance of the same app.</td></tr>
     </table>
@@ -289,7 +298,62 @@ const html = `<!doctype html>
   <div class="evidence"><img src="${images.osInjection}"><div class="caption">Real PowerShell <code>SendInput</code> session — curved <code>SetCursorPos</code> pointer paths, randomised per-character delays, <code>mouse_event</code> clicks, genuine page load: now classified AGENT, score 0.94, HTTP 403, on <code>behavioral:injected-key-input</code> and <code>client:untrusted-form-interaction</code>.</div></div>
   <p class="footnote">A rewrite that injects real virtual-key/scan-code pairs instead of Unicode packets defeats this specific signal — the keystrokes become indistinguishable from hardware. The supporting <code>zero-jitter-clicks</code> heuristic covers part of the pointer side, but this class of attack is not closed by client-side signals alone.</p>
 
-  <h2>10. Scope note</h2>
+  <h2 class="page-break">10. Independent red-team results</h2>
+  <p>A separate red-team pass built ten bypass methods against this build and read every verdict back
+  from <code>GET /api/submissions</code> rather than the screen. Six passed as human. The findings
+  below are reproduced as stated, with what was changed in response.</p>
+  <table>
+    <thead><tr><th>Finding</th><th>Status</th><th>Response</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Client scores are advisory.</strong> The server accepted any self-consistent
+        <code>{score: 0, signals: []}</code>, so a full page-session replay (no browser at all) and a
+        <code>Runtime.evaluate</code> forge from inside a real page both scored human 0.00.</td>
+        <td>Fixed</td>
+        <td>The page now submits the raw sample streams behind its verdict, and the server recomputes
+        the behavioral result itself — the reported score no longer decides anything. Three new gates:
+        <code>missing-behavioral-samples</code>, <code>forged-client-verdict</code> (reported score or
+        signal list disagrees with the samples it was derived from) and
+        <code>impossible-observation-window</code> (claimed observation longer than the page session
+        has existed — a duration comparison, so a visitor with a wrong clock is unaffected). Verified
+        against the red team's own scripts: both now score agent 0.99.</td>
+      </tr>
+      <tr>
+        <td><strong>The CDP console probe never fires</strong> for an attached <code>Input</code>-domain
+        client, even with <code>Runtime.enable</code>.</td>
+        <td>Confirmed, open</td>
+        <td>Reproduced, and a proposed timing fix was measured and <em>rejected</em>: the hypothesis was
+        that CDP-injected pointer input would skip Chromium's rAF-aligned input pipeline. It does not.
+        Median inter-event gap was 16.9 ms for CDP versus 16.8 ms for real OS input, with zero
+        sub-frame gaps in either. No discriminator was shipped, because none was found.</td>
+      </tr>
+      <tr>
+        <td><strong><code>injected-key-input</code> is effectively a scan-code check</strong> — it
+        catches <code>KEYEVENTF_UNICODE</code> and stock pyautogui, but not
+        <code>KEYEVENTF_SCANCODE</code>, CDP <code>Input</code>, or USB-HID.</td>
+        <td>Accurate, open</td>
+        <td>Correct as stated. Injection that supplies a real scan code is indistinguishable from
+        hardware at the DOM level; there is nothing left in the key event to compare.</td>
+      </tr>
+      <tr>
+        <td><strong><code>zero-jitter-clicks</code> skipped presses held under 40 ms</strong>, so a fast
+        synthetic clicker slipped past regardless of jitter.</td>
+        <td>Fixed</td>
+        <td>A press now reads as machine-made if it releases on the pixel it pressed <em>or</em> is
+        gone before a finger could lift. Skipping the quick ones only told a clicker to hurry.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p><strong>What remains open.</strong> Four of the six passing methods are unaddressed, and two of
+  them cannot be closed from inside the browser: OS-level injection with real scan codes
+  (PowerShell <code>SendInput</code>, patched pyautogui) and a raw CDP <code>Input</code> client
+  driving a normal Chrome build. Both produce genuinely trusted events, a real page load and
+  human-grade input; the samples the server now recomputes are honest samples of real input. The
+  remaining lever is not another client signal — it is server-side cost: per-session and per-IP rate
+  limits, a review queue for anything above a risk threshold, and treating the verdict as one input to
+  that decision rather than the decision.</p>
+
+  <h2>11. Scope note</h2>
   <p>This is a risk-based set of ${detectionCases.length} classification scenarios covering the app's documented layers and the requested Chrome/DOM/JavaScript/request techniques. “All possible” browser and network combinations are not finite; the report does not certify every OS, browser version, mobile device, assistive technology, extension, proxy or TLS terminator.</p>
   <p>Chrome DevTools MCP was used directly for native MCP form filling/clicking and MCP-executed <code>HTMLElement.click()</code>, <code>form.requestSubmit()</code>, and synthetic submit dispatch. The wider matrix additionally used installed Google Chrome through Patchright and raw requests.</p>
   <p class="footnote">${data.results.length - detectionCases.length} additional functionality, false-positive-guard and security checks also passed (page/dashboard loading, validation, HTTP handling, storage limits, Unicode, dashboard consistency/reset and output encoding). They are excluded from the headline numbers because they do not answer HUMAN versus AGENT.</p>

@@ -4,9 +4,11 @@ A self-hosted contact form that decides, per submission, whether it was filled i
 by an **agent / bot** — with no auth, no CAPTCHA, no third-party API and no outbound network calls at
 request time. Every signal is computed locally from the browser and from the HTTP request itself.
 
-Latest verified run: **78/78 harness tests pass**, and **63/63 agent-driven submissions are
-classified as AGENT (100%, 0 missed)** — including a real PowerShell `SendInput` session driving a
-live Chrome window. Reports live in `Test_Report/`.
+Latest verified run: **81/81 harness tests pass**, and **66/66 agent-driven submissions in that
+matrix are classified as AGENT** — including a real PowerShell `SendInput` session driving a live
+Chrome window. That is a rate over the attacks in the matrix, not a claim of completeness: an
+independent red team passed four methods it does not contain (see **Known-open vectors** below).
+Reports live in `Test_Report/`.
 
 ---
 
@@ -18,7 +20,7 @@ live Chrome window. Reports live in `Test_Report/`.
 ├─ bot-signal/                      # the detection library + the demo app
 │  ├─ src/                          # instant, behavioral and server detectors (TypeScript)
 │  ├─ data/                         # offline IP lists (datacenter, AbuseIPDB, iCloud Relay)
-│  ├─ test/                         # 392 unit tests (vitest)
+│  ├─ test/                         # 393 unit tests (vitest)
 │  └─ examples/form-demo/
 │     ├─ server.mjs                 # the app: static pages + /api/challenge + /api/submit
 │     ├─ db.mjs                     # SQLite persistence (node:sqlite, no native deps)
@@ -26,7 +28,7 @@ live Chrome window. Reports live in `Test_Report/`.
 │     ├─ bots/                      # scripted + browser bot simulators
 │     └─ public/                    # index.html (form), dashboard.html, app.js, styles.css
 └─ Test_Report/
-   ├─ run_tests.mjs                 # 78-case end-to-end harness (Patchright + direct HTTP)
+   ├─ run_tests.mjs                 # 81-case end-to-end harness (Patchright + direct HTTP)
    ├─ probe/                        # OS input-injection measurement + replay tooling
    ├─ generate_agent_detection_report.mjs
    ├─ results.json                  # raw results of the last run
@@ -238,6 +240,10 @@ an **agent** if any layer rejects it.
 3. **Server (request)** — datacenter / AbuseIPDB / iCloud-Relay IP ranges, UA vs. `sec-ch-ua`
    consistency, Fetch Metadata, `Accept-Language` vs. GeoIP, optional JA3/JA4.
 
+The page's own verdict is treated as advisory. It submits the **raw sample streams** its score was
+derived from, and the server recomputes the behavioral result itself — a fabricated
+`{score: 0, signals: []}` buys nothing, because nothing downstream reads it.
+
 On top of those, the demo server refuses anything that did not come from a real page load:
 
 - both browser layers must be present and internally consistent;
@@ -246,7 +252,12 @@ On top of those, the demo server refuses anything that did not come from a real 
 - a **cookie-bound page-load session** whose document *and* every subresource
   (`styles.css`, `bot-signal.global.js`, `app.js`) were actually fetched with matching Fetch
   Metadata — a direct HTTP client that copies browser headers still leaves no page-load trail;
-- **trusted** form input and submit intent (`event.isTrusted`), with no untrusted form events.
+- **trusted** form input and submit intent (`event.isTrusted`), with no untrusted form events;
+- a **behavioral score the server derived**, not one the client reported — mismatches between the two
+  fire `forged-client-verdict`, and a missing sample set fires `missing-behavioral-samples`;
+- an **observation window that fits inside the page session**. Both sides are durations, never
+  absolute timestamps, so a visitor whose clock is wrong is unaffected, but nobody can watch a page
+  for longer than the page has existed.
 
 ### OS-level input injection
 
@@ -276,12 +287,28 @@ alone.
 hardware keystrokes, and `verify_real_injection.mjs` replays a full PowerShell injection run against a
 live server. Both take over the mouse and keyboard while they run.
 
-**Honest limitation:** this raises the cost of forgery, it does not make it impossible. Two routes
-stay open by construction. A script that fully replays a page load — cookie jar, every subresource,
-correct Fetch Metadata, realistic timing — satisfies the provenance layer, because that layer
-verifies a trail and not a person. And an injector that sends real virtual-key/scan-code pairs instead
-of Unicode packets produces keystrokes a browser cannot tell from hardware; only the pointer-level
-heuristics remain against it. Treat the verdict as a risk signal, not as proof of human identity.
+### Known-open vectors
+
+An independent red team built ten bypass methods against this app and read every verdict back from
+`GET /api/submissions`. Six passed. Two classes were fixed (the forged client verdict, and a
+sub-40 ms dwell gap in `zero-jitter-clicks`); these remain open, and are stated here rather than
+buried:
+
+| Vector | Why it is open |
+|---|---|
+| OS-level injection with real **scan codes** (`SendInput` + `KEYEVENTF_SCANCODE`, patched pyautogui) | The key event is identical to hardware. `injected-key-input` is, in effect, a scan-code check: it catches `KEYEVENTF_UNICODE` and stock pyautogui, which send scan code 0, and nothing else. |
+| Raw **CDP `Input`** client driving a normal Chrome build | No `navigator.webdriver`, no automation launcher, genuinely trusted events. The library's console-based CDP probe does not fire for an attached `Input`-domain session, with or without `Runtime.enable`. |
+
+A timing-based fix for the CDP case was measured and **rejected**: the hypothesis was that
+CDP-injected pointer input would bypass Chromium's rAF-aligned input pipeline. It does not — median
+inter-event gap 16.9 ms for CDP against 16.8 ms for real OS input, zero sub-frame gaps in either
+(`Test_Report/probe/cdp_timing_probe.mjs`). Nothing was shipped for it, because nothing worked.
+
+**Honest limitation:** this raises the cost of forgery; it does not make it impossible. Both open
+vectors produce genuinely trusted events, a real page load and human-grade input, so the samples the
+server recomputes are honest samples of real input. There is no client-side signal left to add. The
+remaining lever is server-side cost — per-session and per-IP rate limits, a review queue above a risk
+threshold, and treating the verdict as one input to that decision rather than the decision itself.
 
 ---
 
@@ -289,12 +316,12 @@ heuristics remain against it. Treat the verdict as a risk signal, not as proof o
 
 ```bash
 cd bot-signal
-npm test                                   # 392 unit tests
+npm test                                   # 393 unit tests
 node examples/form-demo/crosscheck.mjs     # 30 server-detection cases
 
 npx patchright install chromium            # once, for the browser harness
 cd ../Test_Report
-node run_tests.mjs                         # 78 end-to-end cases -> results.json
+node run_tests.mjs                         # 81 end-to-end cases -> results.json
 node generate_agent_detection_report.mjs   # -> HTML + PDF report
 ```
 

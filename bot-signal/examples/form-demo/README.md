@@ -19,7 +19,14 @@ Metadata, and credible trusted form input plus submit intent. A direct HTTP clie
 browser headers still leaves no page-load trail, so `client:invalid-page-session` fires. Text pushed
 in at the OS level with `SendInput`/`KEYEVENTF_UNICODE` arrives as a trusted keydown with no physical
 key behind it (empty `code`, `keyCode` 231), which the browser layer reports as
-`injected-key-input` and the server re-checks on the submitted interaction record. These checks
+`injected-key-input` and the server re-checks on the submitted interaction record.
+
+The page's own verdict is advisory: it submits the raw sample streams behind its score, and the
+server recomputes the behavioral result with `analyzeBehavioralSamples` rather than reading the
+reported number. A reported verdict that disagrees with its own samples fires
+`forged-client-verdict`; a missing sample set fires `missing-behavioral-samples`; and a claimed
+observation window longer than the page session has existed fires `impossible-observation-window`
+(durations on both sides, so a wrong client clock is harmless). These checks
 raise the cost of posting fabricated client results, but the
 browser remains an attacker-controlled environment: use the verdict as a risk signal, not proof of
 human identity.

@@ -307,6 +307,27 @@ export function createBehavioralClientDetector(
 
   const getResult = (): BehavioralClientResult => evaluate();
 
+  /**
+   * Snapshot of the raw samples behind `getResult()`, so the verdict can be
+   * recomputed somewhere the page cannot reach — a server that only receives a
+   * score has to take the page's word for it.
+   */
+  const getSamples = (): Required<BehavioralSamples> => {
+    if (isActive) {
+      pruneRetainedSamples();
+    }
+
+    return {
+      mouseMoves: [...samples.mouseMoves],
+      scrolls: [...samples.scrolls],
+      keyPresses: [...samples.keyPresses],
+      clicks: [...samples.clicks],
+      touches: [...samples.touches],
+      buttons: [...samples.buttons],
+      observationMs: getObservationMs(),
+    };
+  };
+
   const observe = (
     durationMs = minObservationMs,
   ): Promise<BehavioralClientResult> => {
@@ -331,6 +352,7 @@ export function createBehavioralClientDetector(
     stop,
     reset,
     getResult,
+    getSamples,
     observe,
   };
 }

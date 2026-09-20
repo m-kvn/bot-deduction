@@ -1,0 +1,12 @@
+<!doctype html><html><head><title>BSTIMING-WINDOW</title></head>
+<body style="margin:0;height:100vh;background:#111">
+<pre id="out" style="color:#eee;font:14px monospace">ready</pre>
+<script>
+window.__t = [];
+addEventListener('mousemove', function (e) {
+  window.__t.push(e.timeStamp);
+  document.documentElement.dataset.n = window.__t.length;
+  document.documentElement.dataset.t = window.__t.join(',');
+  document.getElementById('out').textContent = 'moves: ' + window.__t.length;
+}, true);
+</script></body></html>

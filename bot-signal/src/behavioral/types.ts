@@ -146,6 +146,8 @@ export interface BehavioralClientDetector {
   stop(): void;
   reset(): void;
   getResult(): BehavioralClientResult;
+  /** Raw samples behind `getResult()`, for recomputing the verdict elsewhere. */
+  getSamples(): Required<BehavioralSamples>;
   observe(durationMs?: number): Promise<BehavioralClientResult>;
 }
 
