@@ -230,8 +230,21 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 
 ## How a submission is judged
 
-Three independent layers produce a score; they combine as `1 - Π(1 - scoreᵢ)`, and a submission is
-an **agent** if any layer rejects it.
+Three independent layers produce a score; they combine as `1 - Π(1 - scoreᵢ)`. A submission is an
+**agent** if any layer rejects it **or if the combined score reaches 0.6 with more than one layer
+contributing**.
+
+That second clause exists because per-layer thresholds alone are gameable by spreading evidence. A
+session scoring 0.30 instant, 0.30 behavioral and 0.35 server is three independent tells and a
+combined 0.68, yet every layer individually says "fine" — the old rule computed that 0.68, recorded
+it, displayed it, and never read it. Corroboration across layers is the thing worth acting on, so the
+rule requires at least two layers to have contributed rather than letting one noisy environment
+signal carry a verdict (`AGGREGATE_SCORE_THRESHOLD`, `MIN_CORROBORATING_LAYERS`).
+
+The cost is stated plainly: a real person on a corporate VPN, with no webcam, moving a trackpad in
+straight lines scores 0.659 across three layers and is now flagged. Raising the threshold trades that
+back for the spread-evidence attack. The decision is isolated in `verdict.mjs` and
+`verdict_check.mjs` prints the table for any threshold you set.
 
 1. **Instant (browser)** — headless markers, `navigator.webdriver`, automation globals (Playwright,
    Puppeteer, Selenium, CDP), implausible screen geometry, tampered navigator getters.
