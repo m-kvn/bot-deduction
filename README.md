@@ -4,7 +4,7 @@ A self-hosted contact form that decides, per submission, whether it was filled i
 by an **agent / bot** — with no auth, no CAPTCHA, no third-party API and no outbound network calls at
 request time. Every signal is computed locally from the browser and from the HTTP request itself.
 
-Latest verified run: **84/84 harness tests, 400 unit tests, 30 crosscheck cases**, and **66/66
+Latest verified run: **86/86 harness tests, 400 unit tests, 30 crosscheck cases**, and **66/66
 agent-driven submissions in the harness matrix are classified as AGENT** — including a real PowerShell `SendInput` session driving a live
 Chrome window. That is a rate over the attacks in the matrix, not a claim of completeness: an
 independent red team passed four methods it does not contain (see **Known-open vectors** below).
@@ -28,7 +28,7 @@ Reports live in `Test_Report/`.
 │     ├─ bots/                      # scripted + browser bot simulators
 │     └─ public/                    # index.html (form), dashboard.html, app.js, styles.css
 └─ Test_Report/
-   ├─ run_tests.mjs                 # 84-case end-to-end harness (Patchright + direct HTTP)
+   ├─ run_tests.mjs                 # 86-case end-to-end harness (Patchright + direct HTTP)
    ├─ probe/                        # OS input-injection measurement + replay tooling
    ├─ generate_agent_detection_report.mjs
    ├─ results.json                  # raw results of the last run
@@ -253,6 +253,9 @@ On top of those, the demo server refuses anything that did not come from a real 
   (`styles.css`, `bot-signal.global.js`, `app.js`) were actually fetched with matching Fetch
   Metadata — a direct HTTP client that copies browser headers still leaves no page-load trail;
 - **trusted** form input and submit intent (`event.isTrusted`), with no untrusted form events;
+- **text that a keyboard could have produced**: a keyboard delivers one character per `insertText`,
+  while `fill()`, CDP `Input.insertText` and `element.value = …` deliver a whole field in one event.
+  Paste, autofill, drag and IME commits carry their own `inputType` and are never counted;
 - a **behavioral score the server derived**, not one the client reported — mismatches between the two
   fire `forged-client-verdict`, and a missing sample set fires `missing-behavioral-samples`;
 - an **observation window that fits inside the page session**. Both sides are durations, never
@@ -388,7 +391,7 @@ node examples/form-demo/crosscheck.mjs     # 30 server-detection cases
 
 npx patchright install chromium            # once, for the browser harness
 cd ../Test_Report
-node run_tests.mjs                         # 84 end-to-end cases -> results.json
+node run_tests.mjs                         # 86 end-to-end cases -> results.json
 node generate_agent_detection_report.mjs   # -> HTML + PDF report
 ```
 

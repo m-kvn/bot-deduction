@@ -15,6 +15,8 @@ const interaction = {
   untrustedFormEvents: 0,
   printableKeyEvents: 0,
   injectedKeyEvents: 0,
+  typedCharacters: 0,
+  bulkInsertedCharacters: 0,
   editedFields: new Set(),
   submitIntent: null,
 };
@@ -188,11 +190,26 @@ function isSubmitControl(target) {
   );
 }
 
+// A keyboard delivers one character per `insertText`. Automation that sets a
+// field's value in one call — Playwright's fill(), CDP Input.insertText, and the
+// element.value assignments behind most form bots — delivers the whole string in
+// a single event with no keystroke behind it. Paste, autofill, drag and IME
+// commits all carry their own inputType and are not counted here.
+function recordInsertion(event) {
+  if (event.isComposing) return;
+  const inserted = typeof event.data === "string" ? [...event.data].length : 0;
+  if (inserted === 0 || event.inputType !== "insertText") return;
+  if (inserted === 1) interaction.typedCharacters += 1;
+  else interaction.bulkInsertedCharacters += inserted;
+}
+
 function recordEditEvent(event) {
   if (!event.isTrusted) {
     interaction.untrustedFormEvents += 1;
     return;
   }
+
+  if (event.type === "beforeinput") recordInsertion(event);
 
   const name = fieldName(event);
   if (event.type === "beforeinput") interaction.trustedBeforeInputEvents += 1;
@@ -427,6 +444,8 @@ form.addEventListener("submit", async (event) => {
         untrustedFormEvents: interaction.untrustedFormEvents,
         printableKeyEvents: interaction.printableKeyEvents,
         injectedKeyEvents: interaction.injectedKeyEvents,
+        typedCharacters: interaction.typedCharacters,
+        bulkInsertedCharacters: interaction.bulkInsertedCharacters,
       },
     },
   };
