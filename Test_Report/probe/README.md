@@ -1,7 +1,7 @@
 # Measurement probes
 
-The two OS input-injection scripts take over the mouse and keyboard while they run; the TLS probe
-at the end does not.
+The two OS input-injection scripts take over the mouse and keyboard while they run; the TLS and
+pointer probes at the end do not.
 
 ## `probe.mjs` — what does Chromium report for injected keystrokes?
 
@@ -71,3 +71,31 @@ All 18 browser handshakes pass `tls-browser-profile-mismatch` against their own 
 scripted clients fail it when they claim Chrome. Node `http2.connect` offers TLS 1.3 and `h2` like
 a browser and is caught only by the missing GREASE — which is also why a real Firefox spoofing a
 Chrome User-Agent is flagged, and why the signal stays at 0.45.
+
+## `pointer_probe.mjs` — what pressure does a synthesised mouse press carry?
+
+Does **not** take over input. Opens a test page in Patchright's Chromium, presses a button through
+each automation path, and records the `PointerEvent`/`MouseEvent` fields the page saw. Results are
+written to `pointer_probe_results.json`.
+
+```bash
+node pointer_probe.mjs                # HEADFUL=1 for a visible window, CHROME_PATH for another build
+```
+
+Result on Chromium 149:
+
+| Input path | `pointerdown.pressure` | `pointerType` |
+|---|---|---|
+| Patchright `page.mouse.click` / `locator.click` | 0.5 | mouse |
+| Raw CDP `Input.dispatchMouseEvent`, no `force` | **0** | mouse |
+| Raw CDP `Input.dispatchMouseEvent`, `force: 0.5` | 0.5 | mouse |
+| CDP `Input.dispatchTouchEvent` | 1 | touch |
+| `element.click()`, keyboard Enter | *(no pointerdown)* | — |
+
+The same zero was measured end to end through the demo form for Puppeteer 25 and Selenium 4.51
+(ChromeDriver), which dispatch mouse input without `force`. The Pointer Events spec assigns 0.5 to a
+pressed button on hardware that cannot sense pressure, which is what Playwright and Patchright send.
+`synthetic-pointer-pressure` fires when at least half of the trusted mouse presses are weightless.
+No real-hardware baseline has been captured yet, so it is weighted as supporting evidence (0.45)
+and never decides a verdict alone; Apple platforms, where trackpad force reporting differs, are not
+recorded at all.

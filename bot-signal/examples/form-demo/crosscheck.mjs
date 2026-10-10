@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -359,7 +360,7 @@ async function startServer(port, env, scheme = "http") {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     try {
-      const response = await undiciFetch(`${scheme}://127.0.0.1:${port}/api/submissions`, {
+      const response = await undiciFetch(`${scheme}://127.0.0.1:${port}/healthz`, {
         dispatcher: insecureAgent,
       });
       if (response.ok) return child;
@@ -439,6 +440,38 @@ async function runCase(port, testCase) {
 }
 
 const GOOGLEBOT_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+const ADMIN_TOKEN = "crosscheck-admin-token-0123456789";
+const agentKeys = generateKeyPairSync("ed25519");
+const agentJwk = agentKeys.publicKey.export({ format: "jwk" });
+const agentKeyId = createHash("sha256")
+  .update(`{"crv":"Ed25519","kty":"OKP","x":${JSON.stringify(agentJwk.x)}}`)
+  .digest("base64url");
+const AGENT_KEYS = JSON.stringify([{ name: "Crosscheck Agent", category: "ai_agent", jwk: agentJwk }]);
+
+function signedAgentHeaders(base, tamper = false) {
+  const authority = new URL(base).host;
+  const created = Math.floor(Date.now() / 1000);
+  const params = `("@authority");created=${created};expires=${created + 60};keyid="${agentKeyId}";tag="web-bot-auth"`;
+  const signature = sign(null, Buffer.from(`"@authority": ${authority}\n"@signature-params": ${params}`), agentKeys.privateKey);
+  if (tamper) signature[0] ^= 0xff;
+  return { "signature-input": `sig1=${params}`, signature: `sig1=:${signature.toString("base64")}:` };
+}
+
+function decoyConfig(html) {
+  const match = /<script type="application\/json" id="api-config">(.*?)<\/script>/.exec(html);
+  return match ? JSON.parse(match[1]) : null;
+}
+
+async function loadPage(base) {
+  const response = await fetch(`${base}/index.html`, {
+    headers: baseHeaders({ "sec-fetch-site": "none", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" }),
+  });
+  return { html: await response.text(), cookie: sessionCookie(response) };
+}
+
+async function protectionEvents(base, headers = {}) {
+  return (await (await fetch(`${base}/api/protection`, { headers })).json()).events;
+}
 
 const PROTECTION_CHECKS = [
   {
@@ -541,6 +574,163 @@ const PROTECTION_CHECKS = [
         (await response.text()) === "Not found" &&
         events.some((event) => event.rule === "tripwire" && event.state === "DRY_RUN" && event.ip === "198.51.100.33")
       );
+    },
+  },
+  {
+    name: "decoy API config is injected and calling it is refused",
+    async run({ base }) {
+      const decoy = decoyConfig((await loadPage(base)).html);
+      const robots = await (await fetch(`${base}/robots.txt`)).text();
+      const response = await fetch(`${base}${decoy.apiBase}/export`, {
+        headers: baseHeaders({ "x-forwarded-for": "198.51.100.50" }),
+      });
+      const events = await protectionEvents(base);
+      return (
+        robots.includes(`Disallow: ${decoy.apiBase}`) &&
+        response.status === 404 &&
+        events.some((event) => event.rule === "decoy" && event.blocked && event.ip === "198.51.100.50")
+      );
+    },
+  },
+  {
+    name: "canary API key from the decoy config is refused anywhere",
+    async run({ base }) {
+      const decoy = decoyConfig((await loadPage(base)).html);
+      const response = await fetch(`${base}/api/challenge`, {
+        headers: baseHeaders({ authorization: `Bearer ${decoy.apiKey}`, "x-forwarded-for": "198.51.100.51" }),
+      });
+      const events = await protectionEvents(base);
+      return (
+        response.status === 404 &&
+        events.some((event) => event.rule === "decoy" && event.reason.includes("canary API key") && event.ip === "198.51.100.51")
+      );
+    },
+  },
+  {
+    name: "page session that mined the decoy API is flagged at submit",
+    async run({ base }) {
+      const { html, cookie } = await loadPage(base);
+      const decoy = decoyConfig(html);
+      await fetch(`${base}${decoy.apiBase}`, { headers: baseHeaders({ cookie }) });
+      const response = await fetch(`${base}/api/submit`, {
+        method: "POST",
+        headers: baseHeaders({ cookie }),
+        body: JSON.stringify({ form: { name: "miner", email: "miner@example.com" } }),
+      });
+      const data = await response.json();
+      return data.verdict === "agent" && data.signals.some((signal) => signal.id === "decoy-api-tripped");
+    },
+  },
+  {
+    name: "signed agent with a trusted key is not trapped by the honeytoken",
+    env: { WEB_BOT_AUTH_KEYS: AGENT_KEYS },
+    async run({ base }) {
+      const href = honeytokenHref((await loadPage(base)).html);
+      const response = await fetch(`${base}${href}`, {
+        headers: { "user-agent": "CrosscheckAgent/1.0", "x-forwarded-for": "198.51.100.52", ...signedAgentHeaders(base) },
+      });
+      const events = await protectionEvents(base);
+      return (
+        response.status === 404 &&
+        (await response.text()) === "Not found" &&
+        events.some((event) => event.rule === "honeytoken" && event.state === "DRY_RUN" && event.reason.includes("signed agent"))
+      );
+    },
+  },
+  {
+    name: "forged Web Bot Auth signature is refused as impersonation",
+    env: { WEB_BOT_AUTH_KEYS: AGENT_KEYS },
+    async run({ base }) {
+      const response = await fetch(`${base}/`, {
+        headers: { "user-agent": "CrosscheckAgent/1.0", ...signedAgentHeaders(base, true) },
+      });
+      const body = await response.json();
+      return response.status === 403 && body.rule === "web-bot-auth";
+    },
+  },
+  {
+    name: "Googlebot from Google's published ranges is not trapped",
+    async run({ base }) {
+      const href = honeytokenHref((await loadPage(base)).html);
+      const response = await fetch(`${base}${href}`, {
+        headers: { "user-agent": GOOGLEBOT_UA, "x-forwarded-for": "66.249.66.1" },
+      });
+      const events = await protectionEvents(base);
+      return (
+        response.status === 404 &&
+        (await response.text()) === "Not found" &&
+        events.some((event) => event.rule === "honeytoken" && event.reason.includes("published IP ranges"))
+      );
+    },
+  },
+  {
+    name: "health checks bypass protection; admin APIs need the token",
+    env: { ADMIN_TOKEN },
+    async run({ base }) {
+      const health = await fetch(`${base}/healthz`, { headers: { "user-agent": "BotSignal-Test/1.0" } });
+      const ready = await fetch(`${base}/readyz`);
+      const anonymous = await fetch(`${base}/api/submissions`);
+      const authorized = await fetch(`${base}/api/submissions`, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
+      const open = await fetch(`${base}/api/challenge`, { headers: baseHeaders() });
+      return health.status === 200 && ready.status === 200 && anonymous.status === 401 && authorized.status === 200 && open.status === 200;
+    },
+  },
+  {
+    name: "operator labels feed per-signal precision",
+    async run({ base }) {
+      await fetch(`${base}/api/submit`, {
+        method: "POST",
+        headers: baseHeaders(),
+        body: JSON.stringify({ form: { name: "labelled", email: "labelled@example.com" } }),
+      });
+      const [submission] = (await (await fetch(`${base}/api/submissions`)).json()).submissions;
+      const review = await fetch(`${base}/api/submissions/${submission.id}/review`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ label: "human" }),
+      });
+      const stats = await (await fetch(`${base}/api/signal-stats`)).json();
+      const [updated] = (await (await fetch(`${base}/api/submissions`)).json()).submissions;
+      return (
+        review.status === 200 &&
+        updated.label === "human" &&
+        stats.labeled === 1 &&
+        stats.falsePositives === 1 &&
+        stats.signals.length > 0 &&
+        stats.signals.every((entry) => entry.human === 1 && entry.precision === 0)
+      );
+    },
+  },
+  {
+    name: "demoted signals stay visible but stop deciding the verdict",
+    env: {
+      DEMOTED_SIGNALS:
+        "missing-client-layer,invalid-challenge,invalid-request-provenance,invalid-page-session,missing-telemetry-stream,untrusted-form-interaction",
+    },
+    async run({ base }) {
+      const response = await fetch(`${base}/api/submit`, {
+        method: "POST",
+        headers: baseHeaders(),
+        body: JSON.stringify({ form: { name: "demoted", email: "demoted@example.com" } }),
+      });
+      const data = await response.json();
+      return data.verdict === "human" && data.demoted.includes("client:invalid-challenge") && data.signals.length > 0;
+    },
+  },
+  {
+    name: "token-bucket submit limit refuses the burst past capacity",
+    env: { RATE_LIMIT_ALGORITHM: "token-bucket", SUBMIT_RATE_LIMIT_MAX: "2" },
+    async run({ base }) {
+      const statuses = [];
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await fetch(`${base}/api/submit`, {
+          method: "POST",
+          headers: baseHeaders(),
+          body: JSON.stringify({ form: { name: "bucket", email: "bucket@example.com" } }),
+        });
+        statuses.push(response.status);
+      }
+      return statuses[0] !== 429 && statuses[1] !== 429 && statuses[2] === 429;
     },
   },
   {

@@ -185,8 +185,19 @@ interface PointSample {
 
 function maxLineDeviation(points: PointSample[]): number {
   const start = points[0];
-  const end = points[points.length - 1];
-  const lineLength = Math.hypot(end.x - start.x, end.y - start.y);
+  let end = points[points.length - 1];
+  let lineLength = Math.hypot(end.x - start.x, end.y - start.y);
+
+  // A closed path still needs a baseline; use its farthest point from the start.
+  if (lineLength === 0) {
+    for (const point of points) {
+      const distance = Math.hypot(point.x - start.x, point.y - start.y);
+      if (distance > lineLength) {
+        end = point;
+        lineLength = distance;
+      }
+    }
+  }
 
   if (lineLength === 0) {
     return 0;
@@ -814,6 +825,18 @@ export function hasZeroJitterClicks(
   return measured >= MIN_ZERO_JITTER_CLICKS && inhuman === measured;
 }
 
+export function hasSyntheticPointerPressure(buttons: ButtonSample[] | undefined): boolean {
+  const presses = (buttons ?? []).filter(
+    (button) =>
+      button.kind === "down" &&
+      button.isTrusted &&
+      button.pointerType === "mouse" &&
+      typeof button.pressure === "number",
+  );
+  const weightless = presses.filter((button) => button.pressure === 0).length;
+  return weightless > 0 && weightless * 2 >= presses.length;
+}
+
 interface ChordFrame {
   chord: number;
   samples: Array<{ s: number; d: number }>;
@@ -1061,6 +1084,13 @@ export function buildBehavioralSignals(samples: BehavioralSamples): BehavioralSi
       "Every measured click released on the exact pixel it pressed, or too fast to be a finger",
       hasZeroJitterClicks(samples.buttons, samples.mouseMoves, touches),
       0.3,
+      "medium",
+    ),
+    createSignal(
+      "synthetic-pointer-pressure",
+      "Mouse presses reported zero pressure, which Puppeteer, Selenium and raw CDP input produce but a mouse does not",
+      hasSyntheticPointerPressure(samples.buttons),
+      0.45,
       "medium",
     ),
     createSignal(

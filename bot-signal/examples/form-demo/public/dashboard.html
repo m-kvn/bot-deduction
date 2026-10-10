@@ -33,10 +33,33 @@
               <th>IP / UA</th>
               <th>Layers</th>
               <th>Top signals</th>
+              <th>Review</th>
             </tr>
           </thead>
           <tbody id="rows">
-            <tr><td colspan="7" class="muted">No submissions yet — fill the form.</td></tr>
+            <tr><td colspan="8" class="muted">No submissions yet — fill the form.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Signal precision <span class="muted small" id="precision-summary"></span></h2>
+        <p class="muted small">
+          Built from the submissions you label above. A signal that keeps firing on people you marked
+          human is a false-positive source: add its id to <code>DEMOTED_SIGNALS</code> and it is still
+          reported but no longer counts towards the verdict.
+        </p>
+        <table id="precision-table">
+          <thead>
+            <tr>
+              <th>Signal</th>
+              <th>On humans</th>
+              <th>On agents</th>
+              <th>Precision</th>
+            </tr>
+          </thead>
+          <tbody id="precision-rows">
+            <tr><td colspan="4" class="muted">Label a few submissions to see which signals hold up.</td></tr>
           </tbody>
         </table>
       </section>

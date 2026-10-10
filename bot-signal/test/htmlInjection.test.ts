@@ -3,7 +3,7 @@ import http from "node:http";
 import zlib from "node:zlib";
 import type { AddressInfo } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { findBodyCloseIndex, injectHoneytokenIntoResponse } from "../src/server/index.js";
+import { findBodyCloseIndex, injectHoneytokenIntoResponse, injectMarkupIntoFetchResponse } from "../src/server/index.js";
 
 const LINK = '<a hidden href="/trap">.</a>';
 
@@ -292,5 +292,64 @@ describe("injectHoneytokenIntoResponse", () => {
       res.end("</main></body></html>");
     });
     expect(body).toBe(`<html><head></head><body><main></main>${LINK}</body></html>`);
+  });
+});
+
+describe("injectMarkupIntoFetchResponse", () => {
+  function streamed(chunks: string[], init: ResponseInit = {}): Response {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/html; charset=utf-8", "content-length": "999" }, ...init });
+  }
+
+  it("injects before the real </body> across chunk boundaries and drops Content-Length", async () => {
+    const response = injectMarkupIntoFetchResponse(
+      streamed([
+        "<html><body><p>héllo</p><script>const s = '</bo",
+        "dy>';</script><!-- </body> -->",
+        "<p>end</p></b",
+        "ody></html>",
+      ]),
+      LINK,
+    );
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(await response.text()).toBe(
+      `<html><body><p>héllo</p><script>const s = '</body>';</script><!-- </body> --><p>end</p>${LINK}</body></html>`,
+    );
+  });
+
+  it("streams long documents through without holding them and passes the tail after injecting", async () => {
+    const filler = "x".repeat(5000);
+    const response = injectMarkupIntoFetchResponse(streamed([`<body>${filler}`, `${filler}</body>`, "<!-- after -->"]), LINK);
+    expect(await response.text()).toBe(`<body>${filler}${filler}${LINK}</body><!-- after -->`);
+    const bodiless = injectMarkupIntoFetchResponse(streamed(["<p>fragment</p>"]), LINK);
+    expect(await bodiless.text()).toBe("<p>fragment</p>");
+  });
+
+  it("leaves non-HTML, non-200, compressed and empty responses untouched", () => {
+    const json = new Response("{}", { headers: { "content-type": "application/json" } });
+    expect(injectMarkupIntoFetchResponse(json, LINK)).toBe(json);
+    const missing = new Response("<body></body>", { status: 404, headers: { "content-type": "text/html" } });
+    expect(injectMarkupIntoFetchResponse(missing, LINK)).toBe(missing);
+    const gzipped = new Response("x", { headers: { "content-type": "text/html", "content-encoding": "gzip" } });
+    expect(injectMarkupIntoFetchResponse(gzipped, LINK)).toBe(gzipped);
+    const empty = new Response(null, { headers: { "content-type": "text/html" } });
+    expect(injectMarkupIntoFetchResponse(empty, LINK)).toBe(empty);
+  });
+
+  it("treats an identity encoding as uncompressed", async () => {
+    const response = injectMarkupIntoFetchResponse(
+      streamed(["<body></body>"], { headers: { "content-type": "text/html", "content-encoding": "Identity" } }),
+      LINK,
+    );
+    expect(await response.text()).toBe(`<body>${LINK}</body>`);
   });
 });

@@ -14,9 +14,13 @@ import {
   resolveClientIp,
 } from "./clientIp.js";
 import type { HeaderBag, TrustProxy } from "./clientIp.js";
+import { createCrawlerRangeVerifier } from "./crawlerRanges.js";
+import type { CrawlerRangeVerifier, CrawlerRangeVerifierOptions } from "./crawlerRanges.js";
+import { createDecoy } from "./decoy.js";
+import type { Decoy, DecoyOptions } from "./decoy.js";
 import { createHoneytoken } from "./honeytoken.js";
 import type { Honeytoken, HoneytokenOptions } from "./honeytoken.js";
-import { injectHoneytokenIntoResponse } from "./htmlInjection.js";
+import { injectHoneytokenIntoResponse, injectMarkupIntoFetchResponse } from "./htmlInjection.js";
 import { createRateLimiter, rateLimitHeaders } from "./rateLimit.js";
 import type { RateLimitAlgorithm, RateLimitResult, RateLimitStore, RateLimiter } from "./rateLimit.js";
 import { detectServerClientAsync } from "./scoring.js";
@@ -30,6 +34,8 @@ import type {
   ServerClientResult,
   ServerDetectorOptions,
 } from "./types.js";
+import { createAgentVerifier, DEFAULT_SIGNED_AGENT_DIRECTORIES } from "./webBotAuth.js";
+import type { AgentVerdict, AgentVerifier, AgentVerifierOptions } from "./webBotAuth.js";
 
 export type ProtectionMode = "monitor" | "enforce";
 export type ProtectionConclusion = "ALLOW" | "DENY" | "THROTTLE" | "ERROR";
@@ -64,6 +70,20 @@ export interface BotPolicyProtectionOptions extends BotPolicyOptions {
   dryRun?: boolean;
 }
 
+export interface WebBotAuthProtectionOptions extends AgentVerifierOptions {
+  verifier?: AgentVerifier;
+  onImpersonation?: "deny" | "allow";
+  onClaimed?: "deny" | "allow";
+  allowCategories?: readonly string[];
+  dryRun?: boolean;
+}
+
+export interface DecoyProtectionOptions extends DecoyOptions {
+  dryRun?: boolean;
+}
+
+export type CrawlerVerificationSource = "context" | "header" | "web-bot-auth" | "ip-ranges";
+
 export interface NormalizedProtectionRequest {
   method: string;
   path: string;
@@ -85,6 +105,7 @@ export interface RateLimitRuleOptions {
   paths?: readonly PathPattern[];
   methods?: readonly string[];
   key?: (request: NormalizedProtectionRequest) => string | undefined;
+  onStoreError?: "open" | "closed";
   dryRun?: boolean;
 }
 
@@ -106,6 +127,9 @@ export interface BotProtectionOptions {
   allowIps?: readonly string[];
   tripwire?: boolean | TripwireProtectionOptions;
   honeytoken?: boolean | HoneytokenProtectionOptions;
+  decoy?: boolean | DecoyProtectionOptions;
+  webBotAuth?: boolean | WebBotAuthProtectionOptions;
+  crawlerRanges?: boolean | CrawlerRangeVerifierOptions;
   attackSignatures?: boolean | AttackSignatureProtectionOptions;
   bots?: false | BotPolicyProtectionOptions;
   rateLimit?: false | RateLimitRuleOptions | readonly RateLimitRuleOptions[];
@@ -123,6 +147,7 @@ export interface ProtectionRequest {
   ip?: string;
   peer?: string;
   body?: string;
+  scheme?: string;
   tlsClientHello?: TlsClientHello;
   context?: Partial<ServerClientContext>;
 }
@@ -139,7 +164,7 @@ export interface TrapRecord {
 export interface ProtectionTrapHit {
   path: string;
   honeytoken: boolean;
-  matchedBy: TripwireMatchKind | "honeytoken";
+  matchedBy: TripwireMatchKind | "honeytoken" | "decoy-endpoint" | "canary-credential";
   exempt: boolean;
   exemptReason?: string;
 }
@@ -161,6 +186,9 @@ export interface ProtectionDecision {
   path: string;
   clientIp?: string;
   bot: BotVerdict;
+  agent?: AgentVerdict;
+  crawlerVerification?: CrawlerVerificationStatus;
+  crawlerVerificationSource?: CrawlerVerificationSource;
   trapHit?: ProtectionTrapHit;
   trap?: TrapRecord;
   attack?: AttackSignatureMatch;
@@ -198,10 +226,28 @@ export type ProtectionMiddleware = (
   next?: (error?: unknown) => void,
 ) => Promise<void>;
 
+export interface FetchCheckOptions {
+  ip?: string;
+  peer?: string;
+  serveRobotsTxt?: boolean;
+  robotsTxt?: RobotsTxtProtectionOptions;
+  inspectBody?: boolean;
+  maxBodyBytes?: number;
+  context?: Partial<ServerClientContext>;
+}
+
+export interface FetchProtectionResult {
+  decision: ProtectionDecision;
+  response?: Response;
+}
+
 export interface BotProtection {
   readonly mode: ProtectionMode;
   readonly honeytoken?: Honeytoken;
+  readonly decoy?: Decoy;
   readonly botPolicy?: BotPolicy;
+  readonly agentVerifier?: AgentVerifier;
+  readonly crawlerRanges?: CrawlerRangeVerifier;
   protect(request: ProtectionRequest): Promise<ProtectionDecision>;
   handle(
     req: IncomingMessage,
@@ -209,6 +255,9 @@ export interface BotProtection {
     options?: ProtectionHandleOptions,
   ): Promise<HandledProtectionDecision>;
   middleware(options?: ProtectionMiddlewareOptions): ProtectionMiddleware;
+  check(request: Request, options?: FetchCheckOptions): Promise<FetchProtectionResult>;
+  injectTraps(response: Response): Response;
+  trapMarkup(): string;
   robotsTxt(options?: RobotsTxtProtectionOptions): string;
   getTrap(ip: string): TrapRecord | undefined;
   clearTraps(): void;
@@ -235,6 +284,19 @@ const CRAWLER_STATUSES: ReadonlySet<string> = new Set(["verified", "spoofed", "u
 const ATTRIBUTABLE_FETCH_SITES: ReadonlySet<string> = new Set(["same-origin", "none"]);
 const ATTRIBUTABLE_FETCH_DESTS: ReadonlySet<string> = new Set(["document", "empty"]);
 const ABSOLUTE_FORM_TARGET = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i;
+const DEFAULT_MAX_BODY_BYTES = 16_384;
+const VERIFIED_EXEMPTIONS: Record<CrawlerVerificationSource, string> = {
+  context: "a crawler the edge verified",
+  header: "a crawler the edge verified",
+  "web-bot-auth": "a signed agent the server verified",
+  "ip-ranges": "a crawler inside its operator's published IP ranges",
+};
+const TRAP_DESCRIPTIONS: Record<"honeytoken" | "tripwire" | "decoy" | "canary-credential", readonly [string, string]> = {
+  honeytoken: ["Hidden honeytoken link", "was followed — only link-harvesting automation finds it"],
+  tripwire: ["Scanner bait path", "was requested — no page links to it"],
+  decoy: ["Decoy API endpoint", "was called — only code that mines the page for endpoints finds it"],
+  "canary-credential": ["Request to", "presented the canary API key — it exists only in the decoy page config"],
+};
 
 function optionObject<T extends object>(value: boolean | T | undefined): T | null {
   if (value === false) {
@@ -383,6 +445,64 @@ function writeJson(res: ServerResponse, status: number, headers: Record<string, 
   res.end(JSON.stringify(body));
 }
 
+function jsonResponse(status: number, headers: Record<string, string>, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...headers, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+async function readRequestBody(request: Request, maxBytes: number): Promise<string | undefined> {
+  if (!request.body) {
+    return undefined;
+  }
+  const reader = (request.clone().body as ReadableStream<Uint8Array>).getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (size < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    chunks.push(value);
+    size += value.length;
+  }
+  void reader.cancel();
+  return Buffer.concat(chunks).subarray(0, maxBytes).toString("utf8");
+}
+
+function firstForwarded(headers: HeaderBag, name: string): string | undefined {
+  return readHeader(headers, name)?.split(",")[0].trim() || undefined;
+}
+
+function signatureTargets(
+  request: ProtectionRequest,
+  headers: HeaderBag,
+  trustForwarded: boolean,
+): { url: string; alternateUrls: string[] } | undefined {
+  const target = request.url ?? `${request.path || "/"}${request.query ? `?${request.query}` : ""}`;
+  const absolute = ABSOLUTE_FORM_TARGET.exec(target);
+  const pathAndQuery = absolute ? target.slice(absolute[0].length) || "/" : target;
+  const scheme = (
+    (trustForwarded ? firstForwarded(headers, "x-forwarded-proto") : undefined) ??
+    absolute?.[0].split(":")[0] ??
+    request.scheme ??
+    "http"
+  ).toLowerCase();
+  const host =
+    (trustForwarded ? firstForwarded(headers, "x-forwarded-host") : undefined) ??
+    absolute?.[0].slice(absolute[0].indexOf("//") + 2) ??
+    readHeader(headers, "host");
+  if (!host) {
+    return undefined;
+  }
+  const other = scheme === "https" ? "http" : "https";
+  return {
+    url: `${scheme}://${host}${pathAndQuery}`,
+    alternateUrls: [`${other}://${host}${pathAndQuery}`],
+  };
+}
+
 function validateOptions(options: BotProtectionOptions): void {
   if (options.trustProxy !== undefined && !isValidTrustProxy(options.trustProxy)) {
     throw new TypeError(
@@ -419,6 +539,36 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
   const honeytokenOptions = optionObject(options.honeytoken);
   const honeytoken = honeytokenOptions ? createHoneytoken(honeytokenOptions) : undefined;
 
+  const decoyOptions = options.decoy ? optionObject(options.decoy) : null;
+  const decoy = decoyOptions ? createDecoy(decoyOptions) : undefined;
+
+  const webBotAuthOptions = options.webBotAuth ? optionObject(options.webBotAuth) : null;
+  const agentVerifier = webBotAuthOptions
+    ? (webBotAuthOptions.verifier ??
+      createAgentVerifier({
+        ...webBotAuthOptions,
+        directories: webBotAuthOptions.directories ?? DEFAULT_SIGNED_AGENT_DIRECTORIES,
+      }))
+    : undefined;
+  if (agentVerifier && !webBotAuthOptions?.verifier) {
+    void agentVerifier.refresh();
+  }
+  const allowedAgentCategories = webBotAuthOptions?.allowCategories
+    ? new Set(webBotAuthOptions.allowCategories)
+    : null;
+  const agentPolicy = {
+    onImpersonation: webBotAuthOptions?.onImpersonation ?? "deny",
+    onClaimed: webBotAuthOptions?.onClaimed ?? "allow",
+    dryRun: webBotAuthOptions?.dryRun ?? false,
+  };
+  const decoyDryRun = decoyOptions?.dryRun ?? false;
+  const trustForwarded = trustProxy !== false && trustProxy !== 0;
+
+  const crawlerRanges =
+    options.crawlerRanges === false
+      ? undefined
+      : createCrawlerRangeVerifier(optionObject(options.crawlerRanges) as CrawlerRangeVerifierOptions);
+
   const attackOptions = optionObject(options.attackSignatures);
   const attackDryRun = attackOptions?.dryRun ?? true;
   const botOptions = options.bots ? options.bots : null;
@@ -443,27 +593,40 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
     options: { ...limit, paths: compilePatterns(limit.paths) },
   }));
 
-  function crawlerStatus(request: ProtectionRequest, headers: HeaderBag): CrawlerVerificationStatus | undefined {
+  function crawlerStatus(
+    request: ProtectionRequest,
+    headers: HeaderBag,
+    agent: AgentVerdict | undefined,
+    bot: BotVerdict,
+    ip: string | undefined,
+  ): { status?: CrawlerVerificationStatus; source?: CrawlerVerificationSource } {
     const fromContext = request.context?.crawlerVerificationStatus;
     if (fromContext) {
-      return fromContext;
+      return { status: fromContext, source: "context" };
     }
     const header = trustedHeaders.crawlerVerification
       ? readHeader(headers, trustedHeaders.crawlerVerification)?.trim()
       : undefined;
-    return header && CRAWLER_STATUSES.has(header) ? (header as CrawlerVerificationStatus) : undefined;
+    if (header && CRAWLER_STATUSES.has(header)) {
+      return { status: header as CrawlerVerificationStatus, source: "header" };
+    }
+    if (agent?.status === "verified" || agent?.status === "impersonation") {
+      return { status: agent.status === "verified" ? "verified" : "spoofed", source: "web-bot-auth" };
+    }
+    const ranged = crawlerRanges?.verify(bot.id, ip);
+    return ranged ? { status: ranged.status, source: "ip-ranges" } : {};
   }
 
   function trapHit(
     path: string,
     honeytokenHit: boolean,
     matchedBy: ProtectionTrapHit["matchedBy"],
-    verification: CrawlerVerificationStatus | undefined,
+    verification: { status?: CrawlerVerificationStatus; source?: CrawlerVerificationSource },
     headers: HeaderBag,
   ): ProtectionTrapHit {
     const exemptReason =
-      verification === "verified"
-        ? "a crawler the edge verified"
+      verification.status === "verified"
+        ? VERIFIED_EXEMPTIONS[verification.source as CrawlerVerificationSource]
         : isAttributableTrapRequest(headers)
           ? undefined
           : "a cross-site, embedded or speculative request";
@@ -477,7 +640,7 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
   }
 
   function evaluateTrap(
-    rule: "honeytoken" | "tripwire",
+    rule: "honeytoken" | "tripwire" | "decoy",
     hit: ProtectionTrapHit,
     dryRun: boolean,
     id: string,
@@ -488,12 +651,10 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
     if (!hit.exempt && !dryRun && ip) {
       state.trap = traps.record(clientNetworkKey(ip), hit.path, hit.honeytoken, now);
     }
-    const subject = rule === "honeytoken" ? "Hidden honeytoken link" : "Scanner bait path";
+    const [subject, finding] = TRAP_DESCRIPTIONS[hit.matchedBy === "canary-credential" ? "canary-credential" : rule];
     const reason = hit.exempt
       ? `${subject} ${hit.path} requested by ${hit.exemptReason}; not attributed`
-      : rule === "honeytoken"
-        ? `${subject} ${hit.path} was followed — only link-harvesting automation finds it`
-        : `${subject} ${hit.path} was requested — no page links to it`;
+      : `${subject} ${hit.path} ${finding}`;
     return {
       outcome: {
         rule,
@@ -504,6 +665,45 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
       },
       status: tripwireStatus,
       body: bodyForStatus(tripwireStatus, rule, id),
+    };
+  }
+
+  function evaluateAgent(agent: AgentVerdict, id: string): RuleEvaluation {
+    const metadata = {
+      status: agent.status,
+      agent: agent.agentName,
+      category: agent.category,
+      keyId: agent.keyId,
+      detail: agent.reason,
+    };
+    const excluded =
+      agent.status === "verified" &&
+      allowedAgentCategories !== null &&
+      !allowedAgentCategories.has(agent.category as string);
+    const action =
+      agent.status === "impersonation"
+        ? agentPolicy.onImpersonation
+        : agent.status === "claimed" || excluded
+          ? agentPolicy.onClaimed
+          : "allow";
+    if (action === "allow") {
+      return allow("web-bot-auth", { metadata });
+    }
+    return {
+      outcome: {
+        rule: "web-bot-auth",
+        state: agentPolicy.dryRun ? "DRY_RUN" : "RUN",
+        action: "DENY",
+        reason:
+          agent.status === "impersonation"
+            ? `Web Bot Auth signature claiming ${agent.agentName} failed verification (${agent.reason})`
+            : excluded
+              ? `Verified agent ${agent.agentName} is in category ${agent.category}, which is not allowed`
+              : `Web Bot Auth signature could not be verified (${agent.reason})`,
+        metadata,
+      },
+      status: 403,
+      body: forbiddenBody("web-bot-auth", id),
     };
   }
 
@@ -538,14 +738,23 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
     try {
       result = await limit.limiter.consume(`${name}:${key}`);
     } catch (error) {
+      const reason = `Rate-limit store failed: ${error instanceof Error ? error.message : String(error)}`;
+      if (limitOptions.onStoreError !== "closed") {
+        return { evaluation: { outcome: { rule: name, state: "NOT_RUN", action: "ALLOW", reason } } };
+      }
+      const retryAfter = Math.max(1, Math.ceil(limit.limiter.windowMs / 1000));
       return {
         evaluation: {
           outcome: {
             rule: name,
-            state: "NOT_RUN",
-            action: "ALLOW",
-            reason: `Rate-limit store failed: ${error instanceof Error ? error.message : String(error)}`,
+            state: limitOptions.dryRun ? "DRY_RUN" : "RUN",
+            action: "THROTTLE",
+            reason: `${reason}; failing closed`,
+            metadata: { retryAfterSeconds: retryAfter },
           },
+          status: 429,
+          headers: { "Retry-After": String(retryAfter) },
+          body: { error: "Too Many Requests", retryAfter },
         },
       };
     }
@@ -609,7 +818,6 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
         userAgent,
         body: request.body,
       };
-      const verification = crawlerStatus(request, headers);
       const state: { trap?: TrapRecord } = { trap: ip ? traps.get(clientNetworkKey(ip), now) : undefined };
       const priorTrap = state.trap;
       const evaluations: RuleEvaluation[] = [];
@@ -632,6 +840,29 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
         );
       }
 
+      if (agentVerifier) {
+        const targets = signatureTargets(request, headers, trustForwarded);
+        if (targets) {
+          extras.agent = agentVerifier.verify({ method, headers, ...targets });
+          evaluations.push(evaluateAgent(extras.agent, id));
+        } else {
+          evaluations.push({
+            outcome: {
+              rule: "web-bot-auth",
+              state: "NOT_RUN",
+              action: "ALLOW",
+              reason: "Request lacked the host needed to rebuild a signature base",
+            },
+          });
+        }
+      }
+
+      const verification = crawlerStatus(request, headers, extras.agent, bot, ip);
+      if (verification.status) {
+        extras.crawlerVerification = verification.status;
+        extras.crawlerVerificationSource = verification.source;
+      }
+
       if (honeytoken) {
         const activePaths = honeytoken.current().activePaths.map((candidate) => candidate.toLowerCase());
         const matched = paths
@@ -645,6 +876,24 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
           );
         } else {
           evaluations.push(allow("honeytoken"));
+        }
+      }
+
+      if (decoy) {
+        const endpoint = paths.map((form) => canonicalizeRequestPath(form)).find((form) => decoy.matchesPath(form));
+        const credential = endpoint ? undefined : decoy.findCredential({ headers, query, body: request.body });
+        if (endpoint || credential) {
+          const hit = trapHit(
+            endpoint ?? path,
+            true,
+            endpoint ? "decoy-endpoint" : "canary-credential",
+            verification,
+            headers,
+          );
+          extras.trapHit = extras.trapHit ?? hit;
+          evaluations.push(evaluateTrap("decoy", hit, decoyDryRun, id, ip, now, state));
+        } else {
+          evaluations.push(allow("decoy"));
         }
       }
 
@@ -751,7 +1000,7 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
             secFetchDest: readHeader(headers, "sec-fetch-dest"),
             ...(ja4 || ja3 ? { tlsFingerprint: ja4 || ja3, tlsFingerprintType: ja4 ? "ja4" : "ja3" } : {}),
             tlsClientHello: request.tlsClientHello,
-            crawlerVerificationStatus: verification,
+            crawlerVerificationStatus: verification.status,
             ...request.context,
           },
           detectionOptions,
@@ -831,8 +1080,56 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
     return buildRobotsTxt({
       ...robotsOptions,
       policy: botPolicy,
-      disallow: [...(honeytoken?.current().activePaths ?? []), ...(robotsOptions.disallow ?? [])],
+      disallow: [
+        ...(honeytoken?.current().activePaths ?? []),
+        ...(decoy ? [decoy.path] : []),
+        ...(robotsOptions.disallow ?? []),
+      ],
     });
+  }
+
+  function trapMarkup(): string {
+    return `${honeytoken?.current().linkHtml ?? ""}${decoy?.configHtml ?? ""}`;
+  }
+
+  function injectTraps(response: Response): Response {
+    const markup = trapMarkup();
+    return markup ? injectMarkupIntoFetchResponse(response, markup) : response;
+  }
+
+  async function check(request: Request, checkOptions: FetchCheckOptions = {}): Promise<FetchProtectionResult> {
+    const headers: HeaderBag = {};
+    request.headers.forEach((value, name) => {
+      headers[name] = value;
+    });
+    const decision = await protect({
+      method: request.method,
+      url: request.url,
+      headers,
+      ip: checkOptions.ip,
+      peer: checkOptions.peer,
+      body: checkOptions.inspectBody
+        ? await readRequestBody(request, checkOptions.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)
+        : undefined,
+      context: checkOptions.context,
+    });
+    if (decision.blocked) {
+      return { decision, response: jsonResponse(decision.status, decision.headers, decision.body) };
+    }
+    if (
+      checkOptions.serveRobotsTxt &&
+      decision.path === "/robots.txt" &&
+      (decision.method === "GET" || decision.method === "HEAD")
+    ) {
+      return {
+        decision,
+        response: new Response(decision.method === "HEAD" ? null : robotsTxt(checkOptions.robotsTxt), {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        }),
+      };
+    }
+    return { decision };
   }
 
   async function handle(
@@ -845,6 +1142,7 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
       url: (req as { originalUrl?: string }).originalUrl ?? req.url,
       headers: req.headers,
       peer: req.socket?.remoteAddress,
+      scheme: (req.socket as { encrypted?: boolean } | undefined)?.encrypted ? "https" : "http",
       tlsClientHello: getTlsClientHello(req.socket),
     });
 
@@ -873,8 +1171,9 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
         res.setHeader(name, value);
       }
     }
-    if (honeytoken && handleOptions.injectHoneytoken !== false && decision.method === "GET") {
-      injectHoneytokenIntoResponse(res, honeytoken.current().linkHtml);
+    const markup = trapMarkup();
+    if (markup && handleOptions.injectHoneytoken !== false && decision.method === "GET") {
+      injectHoneytokenIntoResponse(res, markup);
     }
     return { ...decision, responded: false };
   }
@@ -900,10 +1199,16 @@ export function createBotProtection(options: BotProtectionOptions = {}): BotProt
   return {
     mode,
     honeytoken,
+    decoy,
     botPolicy,
+    agentVerifier,
+    crawlerRanges,
     protect,
     handle,
     middleware,
+    check,
+    injectTraps,
+    trapMarkup,
     robotsTxt,
     getTrap: (ip) => {
       const normalized = normalizeIp(ip);

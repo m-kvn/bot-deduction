@@ -243,3 +243,63 @@ export function injectHoneytokenIntoResponse(res: ServerResponse, linkHtml: stri
     return originalEnd.call(res, takeHeld(), callback);
   } as ServerResponse["end"];
 }
+
+export function injectMarkupIntoFetchResponse(response: Response, markup: string): Response {
+  const encoding = response.headers.get("content-encoding");
+  if (
+    response.status !== 200 ||
+    !response.body ||
+    !isInjectableHtml(response.headers.get("content-type")) ||
+    (encoding !== null && encoding.toLowerCase() !== "identity")
+  ) {
+    return response;
+  }
+  const link = Buffer.from(markup, "utf8");
+  const state: ScanState = { closer: null, position: 0 };
+  let injected = false;
+  let held = Buffer.alloc(0);
+  let lower = "";
+  let lowerOffset = 0;
+
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      if (injected) {
+        controller.enqueue(chunk);
+        return;
+      }
+      const incoming = Buffer.from(chunk);
+      held = Buffer.concat([held, incoming]);
+      lower += incoming.toString("latin1").toLowerCase();
+      const index = findBodyCloseIndex(lower, state);
+      if (index !== -1) {
+        const at = lowerOffset + index;
+        controller.enqueue(Buffer.concat([held.subarray(0, at), link, held.subarray(at)]));
+        held = Buffer.alloc(0);
+        injected = true;
+        return;
+      }
+      lower = lower.slice(state.position);
+      lowerOffset += state.position;
+      state.position = 0;
+      const flushed = held.length - HOLDBACK_BYTES;
+      if (flushed > 0) {
+        controller.enqueue(held.subarray(0, flushed));
+        held = held.subarray(flushed);
+        lowerOffset -= flushed;
+      }
+    },
+    flush(controller) {
+      if (held.length > 0) {
+        controller.enqueue(held);
+      }
+    },
+  });
+
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(response.body.pipeThrough(transform), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}

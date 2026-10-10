@@ -4,9 +4,10 @@ import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   createBotProtection,
+  createUpstashRateLimitStore,
   detectServerClientAsync,
   getTlsClientHello,
   isPublicIp,
@@ -16,24 +17,61 @@ import {
 } from "../../dist/server.js";
 import { analyzeBehavioralSamples } from "../../dist/index.js";
 import {
+  AGGREGATE_BEHAVIORAL_THRESHOLD,
+  AGGREGATE_SCORE_THRESHOLD,
   BEHAVIORAL_SCORE_THRESHOLD,
   INSTANT_SCORE_THRESHOLD,
+  MIN_CORROBORATING_LAYERS,
   combineScores,
   decideVerdict,
   hasHardEvidence,
 } from "./verdict.mjs";
 import {
   clearSubmissions,
+  closeDatabase,
   countByVerdict,
   dbFile,
+  getSubmission,
   insertSubmission,
+  labeledSubmissions,
   listSubmissions,
+  updateSubmission,
 } from "./db.mjs";
+
+const configErrors = [];
+
+function numberSetting(name, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER, integer = false } = {}) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
+    configErrors.push(`${name}=${JSON.stringify(raw)} must be ${integer ? "an integer" : "a number"} from ${min} to ${max}`);
+    return fallback;
+  }
+  return value;
+}
+
+function choiceSetting(name, fallback, choices) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  if (!choices.includes(raw.trim())) {
+    configErrors.push(`${name}=${JSON.stringify(raw)} must be one of: ${choices.join(", ")}`);
+    return fallback;
+  }
+  return raw.trim();
+}
+
+function listSetting(name, fallback = "") {
+  return (process.env[name] ?? fallback)
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(here, "public");
 const globalBuild = join(here, "..", "..", "dist", "browser.global.js");
-const PORT = Number(process.env.PORT ?? 8787);
+const PORT = numberSetting("PORT", 8787, { integer: true, max: 65_535 });
 const HOST = process.env.HOST ?? "127.0.0.1";
 const LIST_LIMIT = 200;
 const CHALLENGE_TTL_MS = 5 * 60_000;
@@ -81,19 +119,19 @@ const MIN_EPOCH_MS = 1_600_000_000_000;
 // Proof of work. One submission costs a person a fraction of a second; a client
 // running the form in a loop pays it again on every request and cannot amortise
 // it, so the difficulty rises with how much that address has already sent.
-const POW_BASE_DIFFICULTY = Number(process.env.POW_BASE_DIFFICULTY ?? 16);
-const POW_MAX_DIFFICULTY = Number(process.env.POW_MAX_DIFFICULTY ?? 22);
-const POW_ESCALATION_BITS = Number(process.env.POW_ESCALATION_BITS ?? 2);
+const POW_BASE_DIFFICULTY = numberSetting("POW_BASE_DIFFICULTY", 16, { integer: true, max: 32 });
+const POW_MAX_DIFFICULTY = numberSetting("POW_MAX_DIFFICULTY", 22, { integer: true, max: 32 });
+const POW_ESCALATION_BITS = numberSetting("POW_ESCALATION_BITS", 2, { integer: true, max: 16 });
 
 // Telemetry beacons. The point is not what the beacon says — it is that the
 // server watches it arrive, on the server's own clock. A payload claiming thirty
 // seconds of interaction has to be accompanied by thirty seconds of the session
 // actually existing and reporting, rather than being authored in one go and slept
 // in front of.
-const TELEMETRY_INTERVAL_MS = Number(process.env.TELEMETRY_INTERVAL_MS ?? 2_000);
+const TELEMETRY_INTERVAL_MS = numberSetting("TELEMETRY_INTERVAL_MS", 2_000, { min: 100 });
 const MAX_TELEMETRY_BEACONS = 400;
-const TELEMETRY_STALE_MS = Number(process.env.TELEMETRY_STALE_MS ?? 20_000);
-const TELEMETRY_COVERAGE = Number(process.env.TELEMETRY_COVERAGE ?? 0.5);
+const TELEMETRY_STALE_MS = numberSetting("TELEMETRY_STALE_MS", 20_000);
+const TELEMETRY_COVERAGE = numberSetting("TELEMETRY_COVERAGE", 0.5, { max: 1 });
 
 // How far the page's own behavioral score may sit from the server's recomputation
 // before the difference reads as tampering rather than rounding.
@@ -105,12 +143,12 @@ const SCORE_MISMATCH_TOLERANCE = 0.05;
 // repetition: a hand fills this form once, a loop fills it all afternoon. These
 // do not classify a single submission and deliberately never touch the verdict;
 // they mark a clean-looking submission for review instead of silently accepting it.
-const RISK_WINDOW_MS = Number(process.env.RISK_WINDOW_MS ?? 10 * 60_000);
-const MAX_SUBMISSIONS_PER_SESSION = Number(process.env.MAX_SUBMISSIONS_PER_SESSION ?? 3);
-const MAX_SUBMISSIONS_PER_IP = Number(process.env.MAX_SUBMISSIONS_PER_IP ?? 10);
-const MAX_SESSIONS_PER_IP = Number(process.env.MAX_SESSIONS_PER_IP ?? 12);
-const MAX_CHALLENGES_PER_SESSION = Number(process.env.MAX_CHALLENGES_PER_SESSION ?? 24);
-const MAX_IDENTICAL_SUBMISSIONS = Number(process.env.MAX_IDENTICAL_SUBMISSIONS ?? 1);
+const RISK_WINDOW_MS = numberSetting("RISK_WINDOW_MS", 10 * 60_000, { min: 1_000 });
+const MAX_SUBMISSIONS_PER_SESSION = numberSetting("MAX_SUBMISSIONS_PER_SESSION", 3, { integer: true, min: 1 });
+const MAX_SUBMISSIONS_PER_IP = numberSetting("MAX_SUBMISSIONS_PER_IP", 10, { integer: true, min: 1 });
+const MAX_SESSIONS_PER_IP = numberSetting("MAX_SESSIONS_PER_IP", 12, { integer: true, min: 1 });
+const MAX_CHALLENGES_PER_SESSION = numberSetting("MAX_CHALLENGES_PER_SESSION", 24, { integer: true, min: 1 });
+const MAX_IDENTICAL_SUBMISSIONS = numberSetting("MAX_IDENTICAL_SUBMISSIONS", 1, { integer: true, min: 1 });
 const MAX_RISK_KEYS = 10_000;
 const ipActivity = new Map();
 const TRUST_EDGE_HEADERS = process.env.TRUST_EDGE_HEADERS === "1";
@@ -122,8 +160,6 @@ const MAX_PAGE_SESSIONS = 10_000;
 const REQUIRED_PAGE_ASSETS = ["/styles.css", "/vendor/bot-signal.global.js", "/app.js"];
 const ASSET_FETCH_DEST = { ".css": "style", ".js": "script" };
 const pageSessions = new Map();
-
-const CRAWLER_STATUSES = new Set(["verified", "spoofed", "unverified"]);
 
 // Location/locale signals are routine for travellers, VPN users and anyone whose
 // GeoIP record sits in another US timezone, so they are reported as notes and
@@ -143,20 +179,46 @@ const MIN_SUPPORTING_SIGNALS = 2;
 
 // A US visitor geolocated to another US zone is off by up to 3 hours, so the
 // default 60-minute tolerance would flag them.
-const TZ_TOLERANCE_MINUTES = Number(process.env.TZ_TOLERANCE_MINUTES ?? 180);
+const TZ_TOLERANCE_MINUTES = numberSetting("TZ_TOLERANCE_MINUTES", 180, { max: 1_440 });
 
-const PROTECTION_MODE = process.env.PROTECTION_MODE === "monitor" ? "monitor" : "enforce";
-const TRUST_PROXY_HOPS = Number(process.env.TRUST_PROXY_HOPS ?? 1);
-const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000);
-const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX ?? 600);
-const SUBMIT_RATE_LIMIT_MAX = Number(process.env.SUBMIT_RATE_LIMIT_MAX ?? 30);
-const TRAP_LOCKOUT_MS = Number(process.env.TRAP_LOCKOUT_MS ?? 0);
-const BOT_POLICY_DENY = (process.env.BOT_POLICY_DENY ?? "training_crawler")
-  .split(",")
-  .map((entry) => entry.trim())
-  .filter(Boolean);
+const PROTECTION_MODE = choiceSetting("PROTECTION_MODE", "enforce", ["enforce", "monitor"]);
+const TRUST_PROXY_HOPS = numberSetting("TRUST_PROXY_HOPS", 1, { integer: true });
+const RATE_LIMIT_WINDOW_MS = numberSetting("RATE_LIMIT_WINDOW_MS", 60_000, { min: 1 });
+const RATE_LIMIT_MAX = numberSetting("RATE_LIMIT_MAX", 600, { integer: true });
+const SUBMIT_RATE_LIMIT_MAX = numberSetting("SUBMIT_RATE_LIMIT_MAX", 30, { integer: true });
+const TRAP_LOCKOUT_MS = numberSetting("TRAP_LOCKOUT_MS", 0);
+const BOT_POLICY_DENY = listSetting("BOT_POLICY_DENY", "training_crawler");
 const TLS_CERT_FILE = process.env.TLS_CERT_FILE;
 const TLS_KEY_FILE = process.env.TLS_KEY_FILE;
+const RATE_LIMIT_ALGORITHM = choiceSetting("RATE_LIMIT_ALGORITHM", "sliding", ["fixed", "sliding", "token-bucket"]);
+const RATE_LIMIT_STORE = choiceSetting("RATE_LIMIT_STORE", "memory", ["memory", "upstash"]);
+const RATE_LIMIT_ON_STORE_ERROR = choiceSetting("RATE_LIMIT_ON_STORE_ERROR", "open", ["open", "closed"]);
+const DECOY_ENABLED = choiceSetting("DECOY", "1", ["0", "1"]) === "1";
+const DEMOTED_SIGNALS = new Set(listSetting("DEMOTED_SIGNALS"));
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
+const SHUTDOWN_TIMEOUT_MS = numberSetting("SHUTDOWN_TIMEOUT_MS", 10_000, { min: 0 });
+
+if (Boolean(TLS_CERT_FILE) !== Boolean(TLS_KEY_FILE)) {
+  configErrors.push("TLS_CERT_FILE and TLS_KEY_FILE must be set together");
+}
+if (POW_MAX_DIFFICULTY < POW_BASE_DIFFICULTY) {
+  configErrors.push("POW_MAX_DIFFICULTY must not be lower than POW_BASE_DIFFICULTY");
+}
+if (ADMIN_TOKEN && ADMIN_TOKEN.length < 16) {
+  configErrors.push("ADMIN_TOKEN must be at least 16 characters");
+}
+if (RATE_LIMIT_STORE === "upstash" && !(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN)) {
+  configErrors.push("RATE_LIMIT_STORE=upstash needs UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN");
+}
+for (const [name, value, min, max] of [
+  ["AGGREGATE_SCORE_THRESHOLD", AGGREGATE_SCORE_THRESHOLD, 0, 1],
+  ["AGGREGATE_BEHAVIORAL_THRESHOLD", AGGREGATE_BEHAVIORAL_THRESHOLD, 0, 1],
+  ["MIN_CORROBORATING_LAYERS", MIN_CORROBORATING_LAYERS, 1, 4],
+]) {
+  if (!Number.isFinite(value) || value < min || value > max) {
+    configErrors.push(`${name} must be a number from ${min} to ${max}`);
+  }
+}
 const HONEYPOT_FIELD = "hp_check";
 const MAX_PROTECTION_EVENTS = 500;
 const protectionEvents = [];
@@ -361,40 +423,87 @@ function clientIp(req) {
   );
 }
 
-const protection = createBotProtection({
-  mode: PROTECTION_MODE,
-  trustProxy: TRUST_PROXY,
-  trustedHeaders: TRUST_EDGE_HEADERS ? { crawlerVerification: "x-crawler-verification" } : {},
-  honeytoken: { secret: process.env.HONEYTOKEN_SECRET || undefined },
-  tripwire: { lockoutMs: TRAP_LOCKOUT_MS },
-  attackSignatures: { dryRun: false },
-  bots: BOT_POLICY_DENY.length > 0 ? { deny: BOT_POLICY_DENY } : false,
-  rateLimit: [
-    ...(RATE_LIMIT_MAX > 0
-      ? [{ name: "api-rate-limit", max: RATE_LIMIT_MAX, windowMs: RATE_LIMIT_WINDOW_MS, algorithm: "sliding", paths: ["/api/"] }]
-      : []),
-    ...(SUBMIT_RATE_LIMIT_MAX > 0
-      ? [
-          {
-            name: "submit-rate-limit",
-            max: SUBMIT_RATE_LIMIT_MAX,
-            windowMs: RATE_LIMIT_WINDOW_MS,
-            algorithm: "sliding",
-            paths: ["/api/submit"],
-            methods: ["POST"],
-          },
-        ]
-      : []),
-  ],
-  detection: false,
-});
+function webBotAuthSetting() {
+  const raw = process.env.WEB_BOT_AUTH_KEYS;
+  let keys = [];
+  if (raw) {
+    try {
+      keys = JSON.parse(raw);
+      if (!Array.isArray(keys)) throw new Error("expected an array");
+    } catch (error) {
+      configErrors.push(`WEB_BOT_AUTH_KEYS must be a JSON array of {name, category, jwk}: ${error.message}`);
+      keys = [];
+    }
+  }
+  const directories = choiceSetting("WEB_BOT_AUTH", "0", ["0", "1"]) === "1";
+  if (!directories && keys.length === 0) return false;
+  return { keys, ...(directories ? {} : { directories: [] }) };
+}
+
+const rateLimitStore =
+  RATE_LIMIT_STORE === "upstash" && configErrors.length === 0
+    ? createUpstashRateLimitStore({
+        url: process.env.UPSTASH_REDIS_REST_URL,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN,
+        prefix: process.env.RATE_LIMIT_PREFIX || "bot-signal-demo:rl:",
+      })
+    : undefined;
+
+function rateLimitRule(rule) {
+  return {
+    windowMs: RATE_LIMIT_WINDOW_MS,
+    algorithm: RATE_LIMIT_ALGORITHM,
+    store: rateLimitStore,
+    onStoreError: RATE_LIMIT_ON_STORE_ERROR,
+    ...rule,
+  };
+}
+
+let protection;
+try {
+  protection = createBotProtection({
+    mode: PROTECTION_MODE,
+    trustProxy: TRUST_PROXY,
+    trustedHeaders: TRUST_EDGE_HEADERS ? { crawlerVerification: "x-crawler-verification" } : {},
+    skipPaths: ["/healthz", "/readyz"],
+    honeytoken: { secret: process.env.HONEYTOKEN_SECRET || undefined },
+    decoy: DECOY_ENABLED ? { secret: process.env.HONEYTOKEN_SECRET || undefined } : false,
+    webBotAuth: webBotAuthSetting(),
+    tripwire: { lockoutMs: TRAP_LOCKOUT_MS },
+    attackSignatures: { dryRun: false },
+    bots: BOT_POLICY_DENY.length > 0 ? { deny: BOT_POLICY_DENY } : false,
+    rateLimit: [
+      ...(RATE_LIMIT_MAX > 0
+        ? [rateLimitRule({ name: "api-rate-limit", max: RATE_LIMIT_MAX, paths: ["/api/"] })]
+        : []),
+      ...(SUBMIT_RATE_LIMIT_MAX > 0
+        ? [
+            rateLimitRule({
+              name: "submit-rate-limit",
+              max: SUBMIT_RATE_LIMIT_MAX,
+              paths: ["/api/submit"],
+              methods: ["POST"],
+            }),
+          ]
+        : []),
+    ],
+    detection: false,
+  });
+} catch (error) {
+  configErrors.push(`Request protection rejected its configuration: ${error.message}`);
+}
+
+if (configErrors.length > 0) {
+  console.error(`Invalid configuration:\n  ${configErrors.join("\n  ")}`);
+  process.exit(1);
+}
 
 function recordProtectionEvent(req, decision) {
   const flagged = decision.results.find((outcome) => outcome.action !== "ALLOW");
   if (!flagged) return;
   const enforcedTrap = decision.results.some(
     (outcome) =>
-      (outcome.rule === "honeytoken" || outcome.rule === "tripwire") &&
+      (outcome.rule === "honeytoken" || outcome.rule === "tripwire" || outcome.rule === "decoy") &&
       outcome.state === "RUN" &&
       outcome.action === "DENY",
   );
@@ -405,6 +514,7 @@ function recordProtectionEvent(req, decision) {
         path: decision.trapHit.path,
         at: Date.now(),
         honeytoken: decision.trapHit.honeytoken,
+        matchedBy: decision.trapHit.matchedBy,
       };
     }
   }
@@ -696,6 +806,8 @@ function sanitizeSamples(raw) {
       screenY: finiteNumber(entry.screenY),
       t: finiteNumber(entry.t),
       isTrusted: entry.isTrusted === true,
+      pointerType: typeof entry.pointerType === "string" ? entry.pointerType.slice(0, 16) : undefined,
+      pressure: finiteNumber(entry.pressure),
     })),
     observationMs: finiteNumber(raw.observationMs) ?? 0,
   };
@@ -981,6 +1093,14 @@ function clientSignal(id, description, score = 0.9) {
   return { layer: "client", id, description, score, confidence: "high" };
 }
 
+function layerScore(result) {
+  const fired = (result.signals ?? []).filter((signal) => signal.triggered);
+  if (!fired.some((signal) => DEMOTED_SIGNALS.has(signal.id))) {
+    return result.suspicionScore;
+  }
+  return combineScores(fired.filter((signal) => !DEMOTED_SIGNALS.has(signal.id)).map((signal) => signal.score));
+}
+
 function triggered(layer, result) {
   return (result?.signals ?? [])
     .filter((signal) => signal.triggered)
@@ -1046,7 +1166,7 @@ async function sendFile(res, path) {
   }
 }
 
-async function handleSubmit(req, res) {
+async function handleSubmit(req, res, decision) {
   let payload;
   try {
     payload = await readJsonBody(req);
@@ -1234,19 +1354,27 @@ async function handleSubmit(req, res) {
     );
   }
   if (pageSession?.trapped) {
+    const { matchedBy, path } = pageSession.trapped;
     clientSignals.push(
-      clientSignal(
-        "honeytoken-tripped",
-        `This page session requested the hidden trap path ${pageSession.trapped.path}, which only link-harvesting automation can find`,
-      ),
+      matchedBy === "canary-credential"
+        ? clientSignal(
+            "decoy-api-tripped",
+            "This page session presented the canary API key that exists only in the page's hidden decoy config",
+          )
+        : matchedBy === "decoy-endpoint"
+          ? clientSignal(
+              "decoy-api-tripped",
+              `This page session called the decoy API endpoint ${path}, which only code mining the page for endpoints finds`,
+            )
+          : clientSignal(
+              "honeytoken-tripped",
+              `This page session requested the hidden trap path ${path}, which only link-harvesting automation can find`,
+            ),
     );
   }
 
   const ja4 = TRUST_EDGE_HEADERS ? header(req, "x-ja4") : undefined;
   const ja3 = TRUST_EDGE_HEADERS ? header(req, "x-ja3-hash") : undefined;
-  const crawlerVerification = TRUST_EDGE_HEADERS
-    ? header(req, "x-crawler-verification")
-    : undefined;
 
   const ip = clientIp(req);
   warnOnProxyIp(req, ip);
@@ -1265,9 +1393,7 @@ async function handleSubmit(req, res) {
       tlsFingerprint: ja4 ?? ja3,
       tlsFingerprintType: ja4 ? "ja4" : "ja3",
       tlsClientHello: getTlsClientHello(req.socket),
-      crawlerVerificationStatus: CRAWLER_STATUSES.has(crawlerVerification)
-        ? crawlerVerification
-        : undefined,
+      crawlerVerificationStatus: decision?.crawlerVerification,
       clientUserAgent: typeof client.userAgent === "string" ? client.userAgent : undefined,
       clientTimezone: typeof client.timezone === "string" ? client.timezone : undefined,
       clientLanguage: typeof client.language === "string" ? client.language : undefined,
@@ -1281,12 +1407,15 @@ async function handleSubmit(req, res) {
 
   const serverSignals = triggered("server", server);
   const advisoryNotes = serverSignals.filter((signal) => ADVISORY_SIGNALS.has(signal.id));
-  const decisive = serverSignals.filter((signal) => !ADVISORY_SIGNALS.has(signal.id));
+  const decisive = serverSignals.filter(
+    (signal) => !ADVISORY_SIGNALS.has(signal.id) && !DEMOTED_SIGNALS.has(signal.id),
+  );
+  const countedClientSignals = clientSignals.filter((signal) => !DEMOTED_SIGNALS.has(signal.id));
   const verdict = decideVerdict({
-    instantScore: instantValid ? instant.suspicionScore : null,
-    behavioralScore: behavioralValid ? behavioral.suspicionScore : null,
-    serverScore: server.suspicionScore,
-    clientSignalScores: clientSignals.map((signal) => signal.score),
+    instantScore: instantValid ? layerScore(instant) : null,
+    behavioralScore: behavioralValid ? layerScore(behavioral) : null,
+    serverScore: layerScore(server),
+    clientSignalScores: countedClientSignals.map((signal) => signal.score),
     decisiveServerScores: decisive.map((signal) => signal.score),
   });
   const { isAgent, score, corroboratingLayers } = verdict;
@@ -1341,7 +1470,14 @@ async function handleSubmit(req, res) {
       },
     },
     signals: signals.slice(0, 12),
+    signalIds: signals.map((signal) => `${signal.layer}:${signal.id}`),
     notes: advisoryNotes.map((signal) => signal.id),
+    demoted: signals.filter((signal) => DEMOTED_SIGNALS.has(signal.id)).map((signal) => `${signal.layer}:${signal.id}`),
+    agent:
+      decision?.agent && decision.agent.status !== "none"
+        ? { status: decision.agent.status, name: decision.agent.agentName ?? null }
+        : null,
+    crawlerVerification: decision?.crawlerVerification ?? null,
     corroboratingLayers,
   };
 
@@ -1352,8 +1488,8 @@ async function handleSubmit(req, res) {
   // machine, a touch typist and a trackpad can each produce one of these on their
   // own, and a real person managed all three at once.
   const hardEvidence = hasHardEvidence(
-    signals.map((signal) => signal.id),
-    clientSignals.map((signal) => signal.score),
+    signals.map((signal) => signal.id).filter((id) => !DEMOTED_SIGNALS.has(id)),
+    countedClientSignals.map((signal) => signal.score),
   );
   const outcome = isAgent
     ? hardEvidence
@@ -1378,8 +1514,88 @@ async function handleSubmit(req, res) {
     layers: record.layers,
     signals: record.signals,
     notes: record.notes,
+    demoted: record.demoted,
   });
 }
+
+function isAuthorized(req) {
+  if (!ADMIN_TOKEN) return true;
+  const supplied = (header(req, "authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const expected = createHash("sha256").update(ADMIN_TOKEN).digest();
+  return timingSafeEqual(createHash("sha256").update(supplied).digest(), expected);
+}
+
+function signalStats() {
+  const labeled = labeledSubmissions();
+  const bySignal = new Map();
+  let falsePositives = 0;
+  let falseNegatives = 0;
+  for (const record of labeled) {
+    if (record.verdict === "agent" && record.label === "human") falsePositives += 1;
+    if (record.verdict === "human" && record.label === "agent") falseNegatives += 1;
+    const ids = record.signalIds ?? record.signals.map((signal) => `${signal.layer}:${signal.id}`);
+    for (const id of new Set(ids)) {
+      const entry = bySignal.get(id) ?? { signal: id, human: 0, agent: 0 };
+      entry[record.label] += 1;
+      bySignal.set(id, entry);
+    }
+  }
+  const signals = [...bySignal.values()]
+    .map((entry) => ({
+      ...entry,
+      precision: Number((entry.agent / (entry.agent + entry.human)).toFixed(3)),
+      demoted: DEMOTED_SIGNALS.has(entry.signal.slice(entry.signal.indexOf(":") + 1)),
+    }))
+    .sort((a, b) => a.precision - b.precision || b.human - a.human || a.signal.localeCompare(b.signal));
+  return {
+    labeled: labeled.length,
+    humans: labeled.filter((record) => record.label === "human").length,
+    agents: labeled.filter((record) => record.label === "agent").length,
+    falsePositives,
+    falseNegatives,
+    demoted: [...DEMOTED_SIGNALS],
+    signals,
+  };
+}
+
+async function handleReview(req, res, id) {
+  let payload;
+  try {
+    payload = await readJsonBody(req);
+  } catch {
+    return sendJson(res, 400, { error: "invalid JSON body" });
+  }
+  const label = payload?.label;
+  if (label !== "human" && label !== "agent") {
+    return sendJson(res, 400, { error: 'label must be "human" or "agent"' });
+  }
+  const record = getSubmission(id);
+  if (!record) {
+    return sendJson(res, 404, { error: "no such submission" });
+  }
+  record.label = label;
+  record.labeledAt = new Date().toISOString();
+  if (record.outcome === "review") {
+    record.outcome = label === "human" ? "released" : "discarded";
+  }
+  updateSubmission(record);
+  return sendJson(res, 200, { id, label, outcome: record.outcome });
+}
+
+let ready = false;
+let shuttingDown = false;
+
+function readiness() {
+  if (!ready || shuttingDown) return { status: shuttingDown ? "draining" : "starting", ok: false };
+  try {
+    countByVerdict();
+    return { status: "ready", ok: true };
+  } catch (error) {
+    return { status: `database unavailable: ${error.message}`, ok: false };
+  }
+}
+
+const ADMIN_ROUTES = new Set(["GET /api/submissions", "GET /api/protection", "GET /api/signal-stats", "POST /api/reset"]);
 
 async function handleRequest(req, res) {
   const decision = await protection.handle(req, res, { serveRobotsTxt: true });
@@ -1387,6 +1603,33 @@ async function handleRequest(req, res) {
   if (decision.responded) return;
 
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+
+  if (req.method === "GET" && url.pathname === "/healthz") {
+    return sendJson(res, 200, { status: "ok" });
+  }
+
+  if (req.method === "GET" && url.pathname === "/readyz") {
+    const state = readiness();
+    return sendJson(res, state.ok ? 200 : 503, { status: state.status });
+  }
+
+  const review = /^\/api\/submissions\/([0-9a-f-]{36})\/review$/.exec(url.pathname);
+  if ((ADMIN_ROUTES.has(`${req.method} ${url.pathname}`) || review) && !isAuthorized(req)) {
+    res.writeHead(401, {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "www-authenticate": 'Bearer realm="dashboard"',
+    });
+    return res.end(JSON.stringify({ error: "admin token required" }));
+  }
+
+  if (req.method === "POST" && review) {
+    return handleReview(req, res, review[1]);
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/signal-stats") {
+    return sendJson(res, 200, signalStats());
+  }
 
   if (req.method === "GET" && url.pathname === "/api/challenge") {
     return sendJson(res, 200, createChallenge(req));
@@ -1397,7 +1640,7 @@ async function handleRequest(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/submit") {
-    return handleSubmit(req, res);
+    return handleSubmit(req, res, decision);
   }
 
   if (req.method === "GET" && url.pathname === "/api/submissions") {
@@ -1451,10 +1694,36 @@ if (scheme === "https") trackTlsClientHellos(server);
 
 await preloadIpLists();
 
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received, draining connections`);
+  const force = setTimeout(() => {
+    console.warn(`Connections still open after ${SHUTDOWN_TIMEOUT_MS}ms, closing them`);
+    server.closeAllConnections();
+  }, SHUTDOWN_TIMEOUT_MS);
+  force.unref();
+  server.close(async () => {
+    clearTimeout(force);
+    await protection.destroy();
+    closeDatabase();
+    process.exit(0);
+  });
+  server.closeIdleConnections();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
 server.listen(PORT, HOST, () => {
+  ready = true;
   console.log(`Listening:  ${HOST}:${PORT} (${scheme})`);
   console.log(`Form:      ${scheme}://localhost:${PORT}/`);
   console.log(`Dashboard: ${scheme}://localhost:${PORT}/dashboard.html`);
   console.log(`SQLite:    ${dbFile}`);
   console.log(`Protection: ${PROTECTION_MODE}, robots.txt at /robots.txt`);
+  console.log(`Health:    /healthz (liveness), /readyz (readiness)`);
+  if (!ADMIN_TOKEN && HOST !== "127.0.0.1" && HOST !== "localhost" && HOST !== "::1") {
+    console.warn("ADMIN_TOKEN is unset: the dashboard and its APIs are open to anyone who can reach this host");
+  }
 });

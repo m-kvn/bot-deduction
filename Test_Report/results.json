@@ -1,11 +1,11 @@
 {
-  "generatedAt": "2026-10-10T07:01:29.422Z",
+  "generatedAt": "2026-10-10T09:31:44.069Z",
   "target": "http://localhost:8787/index.html",
   "isolatedTarget": "http://127.0.0.1:8877",
   "browser": "Google Chrome via Patchright (headful) plus Patchright Chromium (headless)",
   "scope": "Functional, DOM, synthetic events, browser fingerprint, direct API, server headers/IP/TLS, dashboard",
-  "total": 92,
-  "passed": 92,
+  "total": 95,
+  "passed": 95,
   "failed": 0,
   "browserErrors": [],
   "results": [
@@ -402,7 +402,7 @@
       "expected": "HTTP 200 with form and detection scripts",
       "actual": "HTTP 200",
       "passed": true,
-      "evidence": "2272 response characters",
+      "evidence": "2418 response characters",
       "severity": ""
     },
     {
@@ -413,7 +413,7 @@
       "expected": "HTTP 200 with submissions table",
       "actual": "HTTP 200",
       "passed": true,
-      "evidence": "2514 response characters",
+      "evidence": "3492 response characters",
       "severity": ""
     },
     {
@@ -653,9 +653,9 @@
       "name": "Human-like automated Patchright session",
       "vector": "Codex/Patchright curved pointer path, varied typing cadence, CDP click",
       "expected": "AGENT",
-      "actual": "AGENT, score 0.868",
+      "actual": "AGENT, score 0.685",
       "passed": true,
-      "evidence": "HTTP 202; browser chips: instant: 0.00 human\nbehavioral: 0.87 agent",
+      "evidence": "HTTP 202; browser chips: instant: 0.00 human\nbehavioral: 0.55 agent",
       "severity": ""
     },
     {
@@ -666,11 +666,22 @@
       "expected": "no sample-integrity signal fires on honest evidence",
       "actual": "none fired",
       "passed": true,
-      "evidence": "Signals seen: behavioral:repeated-typing-cadence, behavioral:teleport-mouse, behavioral:zero-jitter-clicks, behavioral:absent-key-rollover",
+      "evidence": "Signals seen: behavioral:repeated-typing-cadence, behavioral:zero-jitter-clicks",
       "severity": ""
     },
     {
       "id": "TC-061",
+      "category": "False-positive guard",
+      "name": "A mouse press carrying real button pressure is not read as synthetic",
+      "vector": "Pointer presses at pressure 0.5, what the Pointer Events spec assigns a pressed mouse button",
+      "expected": "synthetic-pointer-pressure stays quiet",
+      "actual": "quiet",
+      "passed": true,
+      "evidence": "Signals seen: behavioral:repeated-typing-cadence, behavioral:zero-jitter-clicks",
+      "severity": ""
+    },
+    {
+      "id": "TC-062",
       "category": "Browser detection",
       "name": "OS-level SendInput text injection into a real browser",
       "vector": "KEYEVENTF_UNICODE / VK_PACKET keystrokes — trusted events, real window, real page load",
@@ -681,18 +692,29 @@
       "severity": ""
     },
     {
-      "id": "TC-062",
+      "id": "TC-063",
       "category": "False-positive guard",
       "name": "Hardware-keycode control does not trip the injection signal",
       "vector": "Input.dispatchKeyEvent with a real code/keyCode pair",
       "expected": "injected-key-input stays quiet for keystrokes that name a physical key",
-      "actual": "behavioral chip: behavioral: 0.35 human",
+      "actual": "behavioral chip: behavioral: …",
       "passed": true,
       "evidence": "Guards the OS-injection signal against flagging ordinary typing",
       "severity": ""
     },
     {
-      "id": "TC-063",
+      "id": "TC-064",
+      "category": "Signal coverage",
+      "name": "Raw CDP mouse input reports a weightless button press",
+      "vector": "Input.dispatchMouseEvent without force: trusted pointerdown with pressure 0 (C7/C8 input path)",
+      "expected": "behavioral:synthetic-pointer-pressure fires",
+      "actual": "HUMAN; pressure signal fired",
+      "passed": true,
+      "evidence": "HTTP 202; signals: behavioral:synthetic-pointer-pressure",
+      "severity": ""
+    },
+    {
+      "id": "TC-065",
       "category": "Browser detection",
       "name": "Field values set in one call (fill/insertText)",
       "vector": "Whole field delivered in a single trusted insertText, no keystrokes",
@@ -703,7 +725,7 @@
       "severity": ""
     },
     {
-      "id": "TC-064",
+      "id": "TC-066",
       "category": "Honeypot",
       "name": "Form bot that fills every input trips the hidden honeypot field",
       "vector": "Fills every input in the form, including the off-screen, unfocusable hp_check field",
@@ -714,18 +736,29 @@
       "severity": ""
     },
     {
-      "id": "TC-065",
+      "id": "TC-067",
       "category": "Honeypot",
       "name": "Link-harvesting crawler follows the hidden honeytoken",
       "vector": "Collects every same-origin href on the form page, requests each one, then fills the form",
       "expected": "AGENT with client:honeytoken-tripped, trap request refused and logged",
       "actual": "AGENT; honeytoken fired; 1 trap event(s)",
       "passed": true,
-      "evidence": "Crawled: /dashboard.html → 200; /records/5c36ac91f017 → 404; signals: client:invalid-page-session, client:honeytoken-tripped, behavioral:repeated-typing-cadence, behavioral:zero-jitter-clicks",
+      "evidence": "Crawled: /dashboard.html → 200; /files/c87311872b3d → 404; signals: client:invalid-page-session, client:honeytoken-tripped, behavioral:repeated-typing-cadence, behavioral:zero-jitter-clicks",
       "severity": ""
     },
     {
-      "id": "TC-066",
+      "id": "TC-068",
+      "category": "Honeypot",
+      "name": "API-mining bot calls the decoy endpoint from the page config",
+      "vector": "Reads the inline JSON config a page script would use, calls the advertised API base, then fills the form",
+      "expected": "AGENT with client:decoy-api-tripped, decoy request refused and logged",
+      "actual": "AGENT; decoy fired; probe HTTP 404",
+      "passed": true,
+      "evidence": "Config: {\"apiBase\":\"/api/legacy/759ee2b3ea46\",\"apiKey\":\"key_live_c4c51d9ea0343f64b707c306986c8220\"}; signals: client:decoy-api-tripped, behavioral:repeated-typing-cadence, behavioral:zero-jitter-clicks",
+      "severity": ""
+    },
+    {
+      "id": "TC-069",
       "category": "False-positive guard",
       "name": "Pasting into a field is not read as programmatic insertion",
       "vector": "insertFromPaste is excluded from the unexplained-text count",
@@ -736,7 +769,7 @@
       "severity": ""
     },
     {
-      "id": "TC-067",
+      "id": "TC-070",
       "category": "Browser detection",
       "name": "HTMLElement.click() without pointer movement",
       "vector": "JavaScript button.click()",
@@ -747,7 +780,7 @@
       "severity": ""
     },
     {
-      "id": "TC-068",
+      "id": "TC-071",
       "category": "Browser detection",
       "name": "dispatchEvent(new MouseEvent('click'))",
       "vector": "DOM dispatchEvent click",
@@ -758,7 +791,7 @@
       "severity": ""
     },
     {
-      "id": "TC-069",
+      "id": "TC-072",
       "category": "Browser detection",
       "name": "HTMLElement.click() after trusted mouse movement",
       "vector": "Trusted move immediately followed by synthetic click",
@@ -769,7 +802,7 @@
       "severity": ""
     },
     {
-      "id": "TC-070",
+      "id": "TC-073",
       "category": "Browser detection",
       "name": "dispatchEvent click after trusted mouse movement",
       "vector": "Trusted move masks click-without-movement heuristic",
@@ -780,7 +813,7 @@
       "severity": ""
     },
     {
-      "id": "TC-071",
+      "id": "TC-074",
       "category": "Browser detection",
       "name": "form.requestSubmit()",
       "vector": "DOM requestSubmit without pointer/keyboard event",
@@ -791,7 +824,7 @@
       "severity": ""
     },
     {
-      "id": "TC-072",
+      "id": "TC-075",
       "category": "Browser detection",
       "name": "dispatchEvent(new Event('submit'))",
       "vector": "Synthetic submit event not monitored by behavioral layer",
@@ -802,7 +835,7 @@
       "severity": ""
     },
     {
-      "id": "TC-073",
+      "id": "TC-076",
       "category": "Browser detection",
       "name": "Enter-key form submission",
       "vector": "Single trusted keyboard event after DOM value assignment",
@@ -813,7 +846,7 @@
       "severity": ""
     },
     {
-      "id": "TC-074",
+      "id": "TC-077",
       "category": "Browser detection",
       "name": "Synthetic rapid key sequence",
       "vector": "Six untrusted keydown events then requestSubmit",
@@ -824,7 +857,7 @@
       "severity": ""
     },
     {
-      "id": "TC-075",
+      "id": "TC-078",
       "category": "Browser detection",
       "name": "Synthetic linear mouse path",
       "vector": "Fourteen uniform untrusted mousemove events",
@@ -835,7 +868,7 @@
       "severity": ""
     },
     {
-      "id": "TC-076",
+      "id": "TC-079",
       "category": "Browser detection",
       "name": "Synthetic uniform scrolling",
       "vector": "Eight equal untrusted wheel events at equal cadence",
@@ -846,7 +879,7 @@
       "severity": ""
     },
     {
-      "id": "TC-077",
+      "id": "TC-080",
       "category": "Browser detection",
       "name": "Synthetic teleporting pointer",
       "vector": "Untrusted >600px mouse jump",
@@ -857,7 +890,7 @@
       "severity": ""
     },
     {
-      "id": "TC-078",
+      "id": "TC-081",
       "category": "Browser detection",
       "name": "Synthetic linear touch gesture",
       "vector": "Untrusted touchstart/touchmove sequence",
@@ -868,7 +901,7 @@
       "severity": ""
     },
     {
-      "id": "TC-079",
+      "id": "TC-082",
       "category": "Browser detection",
       "name": "navigator.webdriver marker",
       "vector": "WebDriver fingerprint",
@@ -879,7 +912,7 @@
       "severity": ""
     },
     {
-      "id": "TC-080",
+      "id": "TC-083",
       "category": "Browser detection",
       "name": "Playwright global marker",
       "vector": "window.__playwright artifact",
@@ -890,7 +923,7 @@
       "severity": ""
     },
     {
-      "id": "TC-081",
+      "id": "TC-084",
       "category": "Browser detection",
       "name": "Puppeteer global marker",
       "vector": "window.__puppeteer_evaluation_script__ artifact",
@@ -901,7 +934,7 @@
       "severity": ""
     },
     {
-      "id": "TC-082",
+      "id": "TC-085",
       "category": "Browser detection",
       "name": "Selenium global marker",
       "vector": "window._selenium artifact",
@@ -912,7 +945,7 @@
       "severity": ""
     },
     {
-      "id": "TC-083",
+      "id": "TC-086",
       "category": "Browser detection",
       "name": "DOM automation controller marker",
       "vector": "window.domAutomationController artifact",
@@ -923,7 +956,7 @@
       "severity": ""
     },
     {
-      "id": "TC-084",
+      "id": "TC-087",
       "category": "Browser detection",
       "name": "Implausibly small screen",
       "vector": "120×160 viewport and screen",
@@ -934,7 +967,7 @@
       "severity": ""
     },
     {
-      "id": "TC-085",
+      "id": "TC-088",
       "category": "Browser detection",
       "name": "Tampered navigator.languages getter",
       "vector": "navigator.languages emptied with a patched native getter",
@@ -945,7 +978,7 @@
       "severity": ""
     },
     {
-      "id": "TC-086",
+      "id": "TC-089",
       "category": "API bypass",
       "name": "In-page fetch with forged clean client scores",
       "vector": "JavaScript fetch() using genuine browser headers",
@@ -956,18 +989,18 @@
       "severity": ""
     },
     {
-      "id": "TC-087",
+      "id": "TC-090",
       "category": "Submission methods",
       "name": "HTMLFormElement.prototype.submit()",
       "vector": "Native submit bypasses app submit listener",
       "expected": "Not accepted by /api/submit",
-      "actual": "POST /api/telemetry; records 41 → 41",
+      "actual": "POST /api/telemetry; records 43 → 43",
       "passed": true,
       "evidence": "Default form action does not create an API submission",
       "severity": ""
     },
     {
-      "id": "TC-088",
+      "id": "TC-091",
       "category": "Browser detection",
       "name": "Standard headless Patchright browser",
       "vector": "Headless browser + automated fill/click",
@@ -978,18 +1011,18 @@
       "severity": ""
     },
     {
-      "id": "TC-089",
+      "id": "TC-092",
       "category": "Dashboard",
       "name": "Dashboard counts and rows match API",
       "vector": "Rendered dashboard versus GET /api/submissions",
-      "expected": "42 total / 0 human / 42 agent",
-      "actual": "42 total / 0 human / 42 agent; 42 rows",
+      "expected": "44 total / 1 human / 43 agent",
+      "actual": "44 total / 1 human / 43 agent; 44 rows",
       "passed": true,
       "evidence": "",
       "severity": ""
     },
     {
-      "id": "TC-090",
+      "id": "TC-093",
       "category": "Security / output encoding",
       "name": "Stored form content is not executed on dashboard",
       "vector": "Stored HTML event-handler and script payload",
@@ -1000,7 +1033,7 @@
       "severity": ""
     },
     {
-      "id": "TC-091",
+      "id": "TC-094",
       "category": "Data handling",
       "name": "Unicode form data round-trips",
       "vector": "Devanagari, CJK, emoji, Arabic",
@@ -1011,7 +1044,7 @@
       "severity": ""
     },
     {
-      "id": "TC-092",
+      "id": "TC-095",
       "category": "Dashboard",
       "name": "Clear/reset removes isolated submissions",
       "vector": "POST /api/reset",
@@ -1022,5 +1055,5 @@
       "severity": ""
     }
   ],
-  "crosscheckOutput": "case                                        expected actual   score  result\n---------------------------------------------------------------------------------------------------------\nhuman baseline                              agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nclean client layers without a page challenge agent    agent    1.00   PASS\n    also fired: client:missing-behavioral-samples, client:missing-telemetry-stream\none-time page challenge replayed            agent    agent    1.00   PASS\n    also fired: client:missing-behavioral-samples, client:missing-telemetry-stream\none browser detection layer omitted         agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-telemetry-stream\ninconsistent browser result object          agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nno trusted field interaction history        agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nscripting client, no page JS                agent    agent    1.00   PASS\n    also fired: client:invalid-challenge, client:missing-telemetry-stream, client:untrusted-form-interaction\ndeclared bot User-Agent                     agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nheader UA vs browser UA mismatch            agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nsec-ch-ua version mismatch                  agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nplatform mismatch                           agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nsec-ch-ua-mobile mismatch                   agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nmissing Fetch Metadata headers              agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nAccept-Language vs navigator.languages      agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nUS visitor, GeoIP in another US timezone    agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nUS IP, traveller keeping an IST clock       agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nUS IP, VPN user with a non-US locale        agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nadvisory notes plus one real signal         agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nAccept-Language vs GeoIP country            agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\ndatacenter IP with browser UA               agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nAU human on a US corporate VPN (datacenter egress) agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\ndatacenter egress plus missing Fetch Metadata agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nAbuseIPDB listed IP                         agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\niCloud Private Relay egress IP              agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nedge says crawler identity spoofed          agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nsuspicious JA3 from TLS terminator          agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nsuspicious JA4 from TLS terminator          agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\ninstant layer forwarded from the page       agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nbehavioral layer forwarded from the page    agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nhidden honeypot form field filled in        agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\npage session followed the hidden honeytoken link agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:impossible-observation-window, client:missing-telemetry-stream\nself-declared scraper outside the strict UA list agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream, server:client-user-agent-mismatch\nJA4 shows HTTP/1.1-only ALPN under a Chrome UA agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nbrowser UA without a TLS fingerprint (REQUIRE_TLS=1) agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\n------------------------------------------------------------------------------------------------\n\nrequest protection                                               result\n----------------------------------------------------------------------------\n[protection] form page carries the hidden honeytoken and honeypot field     ok\n[protection] robots.txt disallows the honeytoken and the training crawlers  ok\n[protection] scanner bait path is refused and logged                        ok\n[protection] SQL injection in the query string is refused                   ok\n[protection] AI training crawler refused by the bot policy                  ok\n[protection] installation probe gets a deterministic denial                 ok\n[protection] crawler the edge verified is not trapped by the honeytoken     ok\n[protection] unverified Googlebot claim on the honeytoken is still trapped  ok\n[protection] cross-site embedded request to bait is not attributed          ok\n[protection] absolute-form request target cannot dodge the submit limit     ok\n[protection] submit flood is throttled with Retry-After                     ok\n[protection] native JA4 over HTTPS exposes a script posing as Chrome        ok\n----------------------------------------------------------------------------\nAll 46 checks wired correctly (34 submissions, 12 protection).\n"
+  "crosscheckOutput": "case                                        expected actual   score  result\n---------------------------------------------------------------------------------------------------------\nhuman baseline                              agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nclean client layers without a page challenge agent    agent    1.00   PASS\n    also fired: client:missing-behavioral-samples, client:missing-telemetry-stream\none-time page challenge replayed            agent    agent    1.00   PASS\n    also fired: client:missing-behavioral-samples, client:missing-telemetry-stream\none browser detection layer omitted         agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-telemetry-stream\ninconsistent browser result object          agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nno trusted field interaction history        agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nscripting client, no page JS                agent    agent    1.00   PASS\n    also fired: client:invalid-challenge, client:missing-telemetry-stream, client:untrusted-form-interaction\ndeclared bot User-Agent                     agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nheader UA vs browser UA mismatch            agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nsec-ch-ua version mismatch                  agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nplatform mismatch                           agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nsec-ch-ua-mobile mismatch                   agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nmissing Fetch Metadata headers              agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nAccept-Language vs navigator.languages      agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nUS visitor, GeoIP in another US timezone    agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nUS IP, traveller keeping an IST clock       agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nUS IP, VPN user with a non-US locale        agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nadvisory notes plus one real signal         agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nAccept-Language vs GeoIP country            agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\ndatacenter IP with browser UA               agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nAU human on a US corporate VPN (datacenter egress) agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\ndatacenter egress plus missing Fetch Metadata agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nAbuseIPDB listed IP                         agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\niCloud Private Relay egress IP              agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nedge says crawler identity spoofed          agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nsuspicious JA3 from TLS terminator          agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nsuspicious JA4 from TLS terminator          agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\ninstant layer forwarded from the page       agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nbehavioral layer forwarded from the page    agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nhidden honeypot form field filled in        agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\npage session followed the hidden honeytoken link agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:impossible-observation-window, client:missing-telemetry-stream\nself-declared scraper outside the strict UA list agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream, server:client-user-agent-mismatch\nJA4 shows HTTP/1.1-only ALPN under a Chrome UA agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\nbrowser UA without a TLS fingerprint (REQUIRE_TLS=1) agent    agent    1.00   PASS\n    also fired: client:invalid-proof-of-work, client:missing-behavioral-samples, client:missing-telemetry-stream\n------------------------------------------------------------------------------------------------\n\nrequest protection                                               result\n----------------------------------------------------------------------------\n[protection] form page carries the hidden honeytoken and honeypot field     ok\n[protection] robots.txt disallows the honeytoken and the training crawlers  ok\n[protection] scanner bait path is refused and logged                        ok\n[protection] SQL injection in the query string is refused                   ok\n[protection] AI training crawler refused by the bot policy                  ok\n[protection] installation probe gets a deterministic denial                 ok\n[protection] crawler the edge verified is not trapped by the honeytoken     ok\n[protection] unverified Googlebot claim on the honeytoken is still trapped  ok\n[protection] cross-site embedded request to bait is not attributed          ok\n[protection] decoy API config is injected and calling it is refused         ok\n[protection] canary API key from the decoy config is refused anywhere       ok\n[protection] page session that mined the decoy API is flagged at submit     ok\n[protection] signed agent with a trusted key is not trapped by the honeytoken ok\n[protection] forged Web Bot Auth signature is refused as impersonation      ok\n[protection] Googlebot from Google's published ranges is not trapped        ok\n[protection] health checks bypass protection; admin APIs need the token     ok\n[protection] operator labels feed per-signal precision                      ok\n[protection] demoted signals stay visible but stop deciding the verdict     ok\n[protection] token-bucket submit limit refuses the burst past capacity      ok\n[protection] absolute-form request target cannot dodge the submit limit     ok\n[protection] submit flood is throttled with Retry-After                     ok\n[protection] native JA4 over HTTPS exposes a script posing as Chrome        ok\n----------------------------------------------------------------------------\nAll 56 checks wired correctly (34 submissions, 22 protection).\n"
 }

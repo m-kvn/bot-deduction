@@ -50,6 +50,12 @@ describe("public entry points", () => {
       computeJa4: expect.any(Function),
       parseTlsClientHello: expect.any(Function),
       MemoryRateLimitStore: expect.any(Function),
+      createAgentVerifier: expect.any(Function),
+      createCrawlerRangeVerifier: expect.any(Function),
+      createDecoy: expect.any(Function),
+      createRedisRateLimitStore: expect.any(Function),
+      createUpstashRateLimitStore: expect.any(Function),
+      injectMarkupIntoFetchResponse: expect.any(Function),
     });
     expect(serverApi.BOT_REGISTRY.length).toBeGreaterThan(100);
     expect("detectInstantClient" in serverApi).toBe(false);
@@ -66,6 +72,8 @@ describe("public entry points", () => {
       getIpListChecker: expect.any(Function),
       createBotProtection: expect.any(Function),
       trackTlsClientHellos: expect.any(Function),
+      createAgentVerifier: expect.any(Function),
+      createDecoy: expect.any(Function),
     });
   });
 

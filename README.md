@@ -4,9 +4,9 @@ A self-hosted contact form that decides, per submission, whether it was filled i
 by an **agent / bot** — with no auth, no CAPTCHA, no third-party API and no outbound network calls at
 request time. Every signal is computed locally from the browser and from the HTTP request itself.
 
-Latest verified run: **92/92 harness tests, 564 unit tests, 46 crosscheck checks** (34 server-detection
-cases + 12 request-protection checks), and **75/75 agent-driven submissions in the harness matrix are
-classified as AGENT** — including a real PowerShell `SendInput` session driving a live
+Latest verified run: **95/95 harness tests, 637 unit tests at 100% coverage, 56 crosscheck checks**
+(34 server-detection cases + 22 request-protection checks), and **76/76 agent-driven submissions in the
+harness matrix are classified as AGENT** — including a real PowerShell `SendInput` session driving a live
 Chrome window. That is a rate over the attacks in the matrix, not a claim of completeness: an
 independent red team passed four methods it does not contain (see **Known-open vectors** below).
 Reports live in `Test_Report/`.
@@ -18,6 +18,7 @@ Reports live in `Test_Report/`.
 ```
 .
 ├─ .env.example                     # every runtime variable, documented
+├─ Dockerfile / docker-compose.yml  # production image (non-root, health-checked) and compose stack
 ├─ bot-signal/                      # the detection library + the demo app
 │  ├─ src/                          # instant, behavioral and server detectors, request protection (TypeScript)
 │  ├─ data/                         # offline IP lists (datacenter, AbuseIPDB, iCloud Relay)
@@ -93,11 +94,23 @@ optional — the defaults below are what the app uses when nothing is set.
 | `TRUST_PROXY_HOPS` | `1` | With `CLIENT_IP_HEADER=x-forwarded-for`, how many proxies you run in front of the app; the client is read that many entries from the **right** |
 | `PROTECTION_MODE` | `enforce` | `monitor` records tripwire, honeytoken, attack-signature, bot-policy and rate-limit hits on the dashboard without refusing them |
 | `RATE_LIMIT_MAX` / `SUBMIT_RATE_LIMIT_MAX` | `600` / `30` | Hard per-IP limits on `/api/*` and on `POST /api/submit` per `RATE_LIMIT_WINDOW_MS` (60000), answered with 429 + `Retry-After`; `0` disables |
+| `RATE_LIMIT_ALGORITHM` | `sliding` | `sliding`, `fixed` or `token-bucket` |
+| `RATE_LIMIT_STORE` | `memory` | `upstash` shares limits across replicas (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`) |
+| `RATE_LIMIT_ON_STORE_ERROR` | `open` | `closed` answers 429 when the shared store is unreachable instead of letting requests through |
 | `TRAP_LOCKOUT_MS` | `0` | Refuse every request from an address for this long after it hits a trap; `0` sends its later submissions to review instead |
 | `BOT_POLICY_DENY` | `training_crawler` | Registry categories, agent names or `ai` to refuse and to publish in `/robots.txt`; empty disables |
-| `HONEYTOKEN_SECRET` | random per process | Secret the hidden honeytoken path is derived from — set the same value on every replica |
+| `HONEYTOKEN_SECRET` | random per process | Secret the honeytoken path, decoy API endpoint and canary key are derived from — set the same value on every replica |
+| `DECOY` | `1` | Inject the inert decoy API config (endpoint + canary key) next to the honeytoken |
+| `WEB_BOT_AUTH` / `WEB_BOT_AUTH_KEYS` | `0` / empty | Verify Web Bot Auth signed agents against the OpenAI and Google directories (`1`, makes outbound calls at startup), or against keys pinned as JSON |
+| `ADMIN_TOKEN` | unset | Bearer token (16+ characters) required by the dashboard APIs. Unset leaves them open — fine on loopback, not on a public host |
+| `DEMOTED_SIGNALS` | empty | Signal ids that stay visible but stop counting towards a verdict — see **Reviewing false positives** |
+| `SHUTDOWN_TIMEOUT_MS` | `10000` | How long `SIGTERM` waits for in-flight requests before closing connections |
 | `TLS_CERT_FILE` / `TLS_KEY_FILE` | unset | Serve HTTPS directly and compute JA3/JA4 from each connection ClientHello, no edge needed |
 | `DEMO_URL` / `HEADFUL` / `BOT_UA` | — | Only used by the bot simulators in `examples/form-demo/bots/` |
+
+Every value is validated at startup: a malformed number, an unknown choice, half a TLS key pair or a
+short `ADMIN_TOKEN` stops the process with the full list of problems instead of running on a
+silently defaulted setting.
 
 Node does not read `.env` files on its own. Either load it explicitly
 (`node --env-file=../../../.env server.mjs` on Node 22+) or let your process manager inject the
@@ -143,6 +156,7 @@ Environment=NODE_ENV=production
 ExecStart=/usr/bin/node server.mjs
 Restart=always
 RestartSec=5
+TimeoutStopSec=20
 
 [Install]
 WantedBy=multi-user.target
@@ -186,35 +200,28 @@ With this in place set `TRUST_EDGE_HEADERS=1` and `CLIENT_IP_HEADER=x-real-ip` i
 
 ### 2. Docker
 
-Create `Dockerfile` at the repo root:
+The repo ships a `Dockerfile` (multi-stage build, runs as the unprivileged `node` user, health-checked
+on `/readyz`, SQLite on the `/data` volume) and a `docker-compose.yml` that refuses to start without
+an `ADMIN_TOKEN`:
 
-```dockerfile
-FROM node:22-slim AS build
-WORKDIR /app
-COPY bot-signal/package*.json ./bot-signal/
-RUN cd bot-signal && npm ci
-COPY bot-signal ./bot-signal
-RUN cd bot-signal && npm run build
-
-FROM node:22-slim
-WORKDIR /app
-ENV NODE_ENV=production PORT=8787 HOST=0.0.0.0 DB_FILE=/data/submissions.db
-COPY --from=build /app/bot-signal/dist          ./bot-signal/dist
-COPY --from=build /app/bot-signal/data          ./bot-signal/data
-COPY --from=build /app/bot-signal/node_modules  ./bot-signal/node_modules
-COPY --from=build /app/bot-signal/package.json  ./bot-signal/package.json
-COPY bot-signal/examples/form-demo ./bot-signal/examples/form-demo
-VOLUME /data
-EXPOSE 8787
-WORKDIR /app/bot-signal/examples/form-demo
-CMD ["node", "server.mjs"]
+```bash
+ADMIN_TOKEN=$(openssl rand -hex 24) docker compose up --build -d
+docker compose ps                      # STATUS shows (healthy) once /readyz answers
+docker compose logs -f
 ```
+
+Or with plain Docker:
 
 ```bash
 docker build -t bot-deduction .
 docker run -d --name bot-deduction -p 8787:8787 -v bot-deduction-data:/data \
-  -e TRUST_EDGE_HEADERS=1 -e CLIENT_IP_HEADER=x-real-ip bot-deduction
+  -e ADMIN_TOKEN=... -e TRUST_EDGE_HEADERS=1 -e CLIENT_IP_HEADER=x-real-ip bot-deduction
 ```
+
+`docker stop` sends `SIGTERM`: the app flips `/readyz` to 503, stops accepting connections, lets
+in-flight requests finish, then closes the rate-limit store and the database before exiting 0.
+Running several replicas behind a load balancer needs `RATE_LIMIT_STORE=upstash` and one shared
+`HONEYTOKEN_SECRET`.
 
 ### 3. A PaaS (Render, Railway, Fly.io, Azure App Service)
 
@@ -222,6 +229,7 @@ docker run -d --name bot-deduction -p 8787:8787 -v bot-deduction-data:/data \
 - Start command: `cd bot-signal/examples/form-demo && node server.mjs`
 - Set `PORT` to whatever the platform injects, `HOST` to `0.0.0.0` so the platform's router can reach it, `DB_FILE` to a path on a persistent volume, and
   `TRUST_EDGE_HEADERS=1` with `CLIENT_IP_HEADER` matching the platform's real-IP header.
+- Point the platform's health check at `/readyz` (or `/healthz` for liveness only) and set `ADMIN_TOKEN`.
 - Without a persistent volume the SQLite file is lost on every redeploy. Use `DB_FILE=:memory:` if
   you only need the live verdict and not the submission history.
 
@@ -229,6 +237,8 @@ docker run -d --name bot-deduction -p 8787:8787 -v bot-deduction-data:/data \
 
 ```bash
 curl -sI https://forms.example.com/index.html          # expect 200
+curl -s https://forms.example.com/readyz               # expect {"status":"ready"}
+curl -s -o /dev/null -w '%{http_code}\n' https://forms.example.com/api/submissions   # expect 401 with ADMIN_TOKEN set
 
 # A direct forged POST must be rejected: expect 403.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
@@ -366,7 +376,7 @@ and are stated here rather than buried:
 | Vector | Why it is open |
 |---|---|
 | OS-level injection with real **scan codes** (`SendInput` + `KEYEVENTF_SCANCODE`, patched pyautogui) | The key event is identical to hardware. `injected-key-input` is, in effect, a scan-code check: it catches `KEYEVENTF_UNICODE` and stock pyautogui, which send scan code 0, and nothing else. |
-| Raw **CDP `Input`** client driving a normal Chrome build | No `navigator.webdriver`, no automation launcher, genuinely trusted events. The library's console-based CDP probe does not fire for an attached `Input`-domain session, with or without `Runtime.enable`. |
+| Raw **CDP `Input`** client driving a normal Chrome build | No `navigator.webdriver`, no automation launcher, genuinely trusted events. The library's console-based CDP probe does not fire for an attached `Input`-domain session, with or without `Runtime.enable`. `Input.dispatchMouseEvent` without a `force` value does leave one tell — a trusted mouse `pointerdown` with `pressure` 0, where a pressed mouse button reports 0.5 — and `synthetic-pointer-pressure` now reports it. It is supporting evidence only (0.45), and passing `force: 0.5` removes it, so the vector stays open. |
 
 Three detection hypotheses were measured and **all three rejected**. Recorded so they do not get
 proposed again:
@@ -456,10 +466,12 @@ library (ported from [WebDecoy/node](https://github.com/WebDecoy/node) and exten
 | Rule | What it refuses | Response |
 |---|---|---|
 | Hidden honeytoken link | Injected into every HTML page at a path derived from `HONEYTOKEN_SECRET`, disallowed in `/robots.txt`. Only a link harvester requests it | 404 |
+| Decoy API and canary key | An inert `<script type="application/json" id="api-config">` injected beside the honeytoken advertises a decoy API base and an API key that no page code uses. Calling that endpoint, or presenting that key in a request header, the query or the body, is something only code mining the page for endpoints does (`Referer`, `Origin` and `Cookie` are browser-supplied and not searched) | 404 |
+| Web Bot Auth | A request signed (RFC 9421) with a trusted agent's key whose signature does not verify — an impersonation. A valid signature marks the request as a verified agent | 403 |
 | Tripwire | Scanner bait — `/.env*`, `/.git/`, `/.aws/`, `/wp-config.php`, SQL dumps — after percent-decoding and `..` resolution | 404 |
 | Attack signatures | Unambiguous SQLi, XSS, traversal, shell and Log4Shell payloads in the path or query | 403 |
 | Bot policy | Agents in `BOT_POLICY_DENY` (AI training crawlers by default), published in `/robots.txt` from the same list | 403 |
-| Rate limits | More than `RATE_LIMIT_MAX` API calls or `SUBMIT_RATE_LIMIT_MAX` submissions per minute from one address | 429 + `Retry-After` |
+| Rate limits | More than `RATE_LIMIT_MAX` API calls or `SUBMIT_RATE_LIMIT_MAX` submissions per minute from one address — sliding window, fixed window or token bucket, in memory or shared through Upstash | 429 + `Retry-After` |
 | Installation probe | `curl -A "BotSignal-Test/1.0"` gets a deterministic 403, proving enforcement is live | 403 |
 
 Two traps also feed the verdict as **hard evidence**:
@@ -468,6 +480,7 @@ Two traps also feed the verdict as **hard evidence**:
 |---|---|
 | `client:honeypot-field-filled` | The off-screen, `aria-hidden`, `tabindex="-1"` field `hp_check` arrives non-empty. Its neutral name and "Leave this field empty" label are chosen so no browser autofill heuristic recognises it |
 | `client:honeytoken-tripped` | The submitting page session requested the hidden honeytoken path |
+| `client:decoy-api-tripped` | The submitting page session called the decoy API endpoint or presented the canary key |
 
 An address that tripped a trap from a *different* page session is sent to review (`risk`), not
 refused — one infected machine behind an office NAT should not lock out its colleagues. Set
@@ -475,14 +488,31 @@ refused — one infected machine behind an office NAT should not lock out its co
 client made itself: cross-site requests, embedded images and scripts, and prefetches are answered
 but never recorded, so another site cannot make your visitors trip a trap by embedding its URL. A
 claimed Googlebot gets no exemption — real search crawlers obey the `robots.txt` Disallow and never
-reach the trap — only a crawler your edge verifies (`X-Crawler-Verification: verified`) does.
+reach the trap. Only a *verified* crawler does: one your edge verifies (`X-Crawler-Verification:
+verified`), one carrying a valid Web Bot Auth signature, or one whose address sits inside the IP
+ranges its operator publishes. Google, Bing, OpenAI, Perplexity, Apple, Common Crawl, DuckDuckGo,
+Ahrefs and Mistral publish those ranges; they ship in `bot-signal/data/crawler_ip_ranges.json`
+(3,304 ranges, refreshed with `npm run update:crawler-ranges`) and are checked locally with no
+network call. Outside its ranges a claimed crawler is `unverified`, not `spoofed`, because a bundled
+list can lag a newly announced range.
 
 The dashboard lists every refused or dry-run request with its rule and reason, and
-`PROTECTION_MODE=monitor` turns all of it into observation only. Like `/api/submissions`, the
-dashboard's `/api/protection` and `/api/reset` endpoints are unauthenticated demo endpoints that
-expose visitor IPs and User-Agents — put them behind your proxy's authentication before exposing the
-demo publicly. `/api/reset` clears the submission and event logs but deliberately not the trap
-records, so a client cannot wipe its own history.
+`PROTECTION_MODE=monitor` turns all of it into observation only. The dashboard APIs
+(`/api/submissions`, `/api/protection`, `/api/signal-stats`, `/api/reset` and the review endpoint)
+expose visitor IPs and User-Agents: they are open by default for local use and require
+`Authorization: Bearer <ADMIN_TOKEN>` once `ADMIN_TOKEN` is set. `/api/reset` clears the submission
+and event logs but deliberately not the trap records, so a client cannot wipe its own history.
+
+### Reviewing false positives
+
+Each dashboard row has **Human** / **Agent** buttons. A label never rewrites the verdict — it is the
+ground truth beside it — but a held submission (`outcome: review`) becomes `released` or `discarded`.
+The **Signal precision** card turns the labels into a per-signal table: how often each signal fired
+on people you labelled human versus agents, plus the false-positive and missed counts. A signal that
+keeps firing on people is a false-positive source on *your* traffic; add its id to
+`DEMOTED_SIGNALS` and it stays visible on every submission (as `demoted`) but no longer counts
+towards the verdict or as hard evidence. This is the measured human baseline the weights still lack,
+collected from the deployment itself.
 
 **Caveat:** a browser extension that fetches every link on a page (link checkers, some SEO tools)
 will request the honeytoken from inside a person's session. That is automation, but not the
@@ -507,14 +537,18 @@ honestly.
 
 ```bash
 cd bot-signal
-npm test                                   # 564 unit tests
-node examples/form-demo/crosscheck.mjs     # 34 server-detection cases + 12 request-protection checks
+npm test                                   # 637 unit tests (npm run test:coverage enforces 100%)
+node examples/form-demo/crosscheck.mjs     # 34 server-detection cases + 22 request-protection checks
+npx patchright install chromium            # once, for the browser suites and harness
+npx playwright install chromium            # once, for the Playwright suite
+npm run test:patchright                    # real-Chromium detection suite (Patchright)
+npm run test:playwright                    # stock Playwright detection suite
 
-npx patchright install chromium            # once, for the browser harness
 cd ../Test_Report
-node run_tests.mjs                         # 92 end-to-end cases -> results.json
+node run_tests.mjs                         # 95 end-to-end cases -> results.json (expects the app on :8787)
 node generate_agent_detection_report.mjs   # -> HTML + PDF report
 node probe/tls_profile_probe.mjs           # real-browser ClientHello measurement (headless)
+node probe/pointer_probe.mjs               # pointer pressure per input path (headless)
 ```
 
 `run_tests.mjs` and `generate_agent_detection_report.mjs` point at a Windows Chrome install
@@ -523,7 +557,9 @@ top of both files to run them on Linux or macOS.
 
 Every case in the harness is agent-driven, so every expected verdict is `AGENT`. **No genuine human
 session has been measured**, which means the false-positive rate against real users is currently
-unknown — worth measuring before this gates anything that matters.
+unknown — worth measuring before this gates anything that matters. The dashboard's review buttons and
+**Signal precision** card are the way to measure it on a real deployment: label what arrives, and
+demote what fires on people.
 
 ---
 
@@ -536,10 +572,17 @@ cookie-bound page-load session layer in `examples/form-demo/server.mjs`.
 The request-protection layer adapts [WebDecoy/node](https://github.com/WebDecoy/node) (MIT, notice in
 `bot-signal/LICENSE`): its tripwire paths and path canonicalisation, honeytoken link and injection,
 186-agent bot registry and bot policy, attack signatures, rate-limit windows and right-to-left proxy
-trust. Added here on top: a synchronous HMAC honeytoken whose base path is itself derived (so no
-universal `/__wd/` prefix to skip), robots.txt disallow, a verified-crawler exemption and a
-cross-site attribution guard for the traps, streaming HTML injection that never unwraps later
-middleware, path matching on every reading of the request target,
-an in-app-browser guard on the registry, form honeypot fields, `UNION ALL` and `+`-encoded query
-matching, bounded rate-limit memory, and JA3/JA4 computed from the ClientHello instead of sent to a
-hosted service.
+trust, Web Bot Auth verification, and the Upstash rate-limit store. Added here on top: a
+synchronous HMAC honeytoken whose base path is itself derived (so no universal `/__wd/` prefix to
+skip), a decoy API endpoint and canary key, robots.txt disallow, a verified-crawler exemption fed by
+edge headers, Web Bot Auth and published crawler IP ranges, and a cross-site attribution guard for
+the traps, streaming HTML injection for both `node:http` and fetch-API responses that never unwraps
+later middleware, path matching on every reading of the request target, an in-app-browser guard on
+the registry, form honeypot fields, `UNION ALL` and `+`-encoded query matching, bounded rate-limit
+memory, a token-bucket algorithm and Lua scripts that keep Redis and in-memory limits arithmetically
+identical (refused requests are not counted), Web Bot Auth that never waits on the network and
+falls back to the other scheme behind TLS-terminating proxies, replay-aware nonces, and JA3/JA4
+computed from the ClientHello instead of sent to a hosted service.
+
+Upstream `okasi/bot-signal` changes are merged through 2.0.18 (`5cda0e5`): Lightpanda detection, the
+closed-path linearity false-positive fix, the Windows Playwright suite and the refreshed IP lists.

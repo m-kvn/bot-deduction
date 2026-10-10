@@ -228,3 +228,41 @@ classification cases still AGENT, zero false-positive guards failing.
 
 **Still open: C4, C6, C8.** C8 shares `cdp_human.py`'s input path with C7 and is expected to fall the
 same way, but was not re-measured in this round and is not claimed.
+
+---
+
+## Round 6 — weightless CDP presses, and traps for API miners
+
+`Input.dispatchMouseEvent` takes an optional `force`. Puppeteer, Selenium/ChromeDriver and a raw CDP
+client that never set it produce a trusted mouse `pointerdown` with `pressure` **0**; Playwright and
+Patchright send 0.5, which is what the Pointer Events spec assigns a pressed button on hardware that
+cannot sense pressure (`probe/pointer_probe.mjs`):
+
+| Input path | `pointerdown.pressure` |
+|---|---|
+| Patchright `page.mouse.click` / `locator.click` | 0.5 |
+| Raw CDP `Input.dispatchMouseEvent`, no `force` | **0** |
+| Raw CDP, `force: 0.5` | 0.5 |
+| Puppeteer 25, Selenium 4.51 (end to end through the form) | **0** |
+
+`synthetic-pointer-pressure` fires when at least half the trusted mouse presses are weightless. With
+no real-hardware baseline it weighs 0.45 and is not hard evidence. The harness reproduces the C7/C8
+input path (raw CDP mouse and key events, real `code`/`keyCode`, held keys, curved moves):
+
+| Case | Result |
+|---|---|
+| Raw CDP mouse input, no `force` | 🟢 **human**, `review` — `synthetic-pointer-pressure` fires alone and stays below the bar |
+
+That is a tell, not a fix: the signal is supporting evidence by design, and `force: 0.5` removes it.
+C7/C8 were not re-run with the red team's scripts, so nothing is claimed for them.
+
+The request-protection layer gained a trap for the reverse-API forger of round 2: an inert JSON config
+on every page advertises a decoy API base and a canary API key that no page code uses. The harness's
+API-mining bot reads the config, calls the base, then fills the form — 🔴 **agent**, rejected on
+`client:decoy-api-tripped`, with the probe refused (404) and logged.
+
+Verified on this machine: 637 unit tests at 100% coverage, 56 crosscheck checks, 95/95 harness,
+76/76 classification cases AGENT, zero false-positive guards failing (including one that a 0.5
+pressure mouse press never fires the new signal).
+
+**Still open: C4, C6, C8**, unchanged.

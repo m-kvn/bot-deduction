@@ -1,4 +1,4 @@
-export type RateLimitAlgorithm = "fixed" | "sliding";
+export type RateLimitAlgorithm = "fixed" | "sliding" | "token-bucket";
 
 export interface RateLimitConsumeRequest {
   key: string;
@@ -50,14 +50,73 @@ interface WindowEntry {
   previous: number;
 }
 
+interface BucketEntry {
+  tokens: number;
+  refilledAt: number;
+}
+
 const DEFAULT_MAX_KEYS = 10_000;
 
 function secondsUntil(at: number, now: number): number {
   return Math.max(1, Math.ceil((at - now) / 1000));
 }
 
+export function fixedWindowResult(count: number, allowed: boolean, resetAt: number, max: number, now: number): RateLimitResult {
+  return {
+    allowed,
+    limit: max,
+    remaining: Math.max(0, max - count),
+    count,
+    resetAt,
+    retryAfterSeconds: allowed ? 0 : secondsUntil(resetAt, now),
+  };
+}
+
+function slidingRetryAt(previous: number, count: number, max: number, windowStart: number, windowMs: number): number {
+  if (count + 1 <= max) {
+    const fraction = 1 - (max - count - 1) / previous;
+    return windowStart + Math.ceil(windowMs * fraction);
+  }
+  const fraction = Math.max(0, 1 - (max - 1) / count);
+  return windowStart + windowMs + Math.ceil(windowMs * fraction);
+}
+
+export function slidingWindowResult(
+  previous: number,
+  count: number,
+  allowed: boolean,
+  max: number,
+  windowMs: number,
+  now: number,
+): RateLimitResult {
+  const windowStart = Math.floor(now / windowMs) * windowMs;
+  const used = previous * (1 - (now - windowStart) / windowMs) + count;
+  const resetAt = allowed ? windowStart + windowMs : slidingRetryAt(previous, count, max, windowStart, windowMs);
+  return {
+    allowed,
+    limit: max,
+    remaining: Math.max(0, Math.floor(max - used)),
+    count: Math.ceil(used),
+    resetAt,
+    retryAfterSeconds: allowed ? 0 : secondsUntil(resetAt, now),
+  };
+}
+
+export function tokenBucketResult(tokens: number, allowed: boolean, max: number, windowMs: number, now: number): RateLimitResult {
+  const missing = allowed ? max - tokens : 1 - tokens;
+  const resetAt = now + Math.ceil((missing * windowMs) / max);
+  return {
+    allowed,
+    limit: max,
+    remaining: Math.max(0, Math.floor(tokens)),
+    count: Math.ceil(max - tokens),
+    resetAt,
+    retryAfterSeconds: allowed ? 0 : secondsUntil(resetAt, now),
+  };
+}
+
 export class MemoryRateLimitStore implements RateLimitStore {
-  private readonly entries = new Map<string, WindowEntry>();
+  private readonly entries = new Map<string, WindowEntry | BucketEntry>();
   private readonly maxKeys: number;
 
   constructor(options: MemoryRateLimitStoreOptions = {}) {
@@ -74,9 +133,12 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
   consume(request: RateLimitConsumeRequest): RateLimitResult {
     const entry = this.touch(request);
+    if (request.algorithm === "token-bucket") {
+      return this.consumeBucket(entry as BucketEntry, request);
+    }
     return request.algorithm === "sliding"
-      ? this.consumeSliding(entry, request)
-      : this.consumeFixed(entry, request);
+      ? this.consumeSliding(entry as WindowEntry, request)
+      : this.consumeFixed(entry as WindowEntry, request);
   }
 
   reset(key: string): void {
@@ -87,7 +149,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
     this.entries.clear();
   }
 
-  private touch({ key, windowMs, algorithm, now }: RateLimitConsumeRequest): WindowEntry {
+  private touch({ key, max, windowMs, algorithm, now }: RateLimitConsumeRequest): WindowEntry | BucketEntry {
     const existing = this.entries.get(key);
     if (existing) {
       this.entries.delete(key);
@@ -98,11 +160,10 @@ export class MemoryRateLimitStore implements RateLimitStore {
     while (this.entries.size >= this.maxKeys) {
       this.entries.delete(this.entries.keys().next().value as string);
     }
-    const created: WindowEntry = {
-      window: algorithm === "sliding" ? Math.floor(now / windowMs) : now,
-      count: 0,
-      previous: 0,
-    };
+    const created: WindowEntry | BucketEntry =
+      algorithm === "token-bucket"
+        ? { tokens: max, refilledAt: now }
+        : { window: algorithm === "sliding" ? Math.floor(now / windowMs) : now, count: 0, previous: 0 };
     this.entries.set(key, created);
     return created;
   }
@@ -114,20 +175,11 @@ export class MemoryRateLimitStore implements RateLimitStore {
       entry.count = 0;
     }
 
-    const resetAt = entry.window + windowMs;
     const allowed = entry.count < max;
     if (allowed) {
       entry.count += 1;
     }
-
-    return {
-      allowed,
-      limit: max,
-      remaining: Math.max(0, max - entry.count),
-      count: entry.count,
-      resetAt,
-      retryAfterSeconds: allowed ? 0 : secondsUntil(resetAt, now),
-    };
+    return fixedWindowResult(entry.count, allowed, entry.window + windowMs, max, now);
   }
 
   private consumeSliding(entry: WindowEntry, request: RateLimitConsumeRequest): RateLimitResult {
@@ -139,41 +191,23 @@ export class MemoryRateLimitStore implements RateLimitStore {
       entry.window = window;
     }
 
-    const windowStart = window * windowMs;
-    const carried = entry.previous * (1 - (now - windowStart) / windowMs);
+    const carried = entry.previous * (1 - (now - window * windowMs) / windowMs);
     const allowed = carried + entry.count + 1 <= max;
     if (allowed) {
       entry.count += 1;
     }
-
-    const used = carried + entry.count;
-    const resetAt = allowed
-      ? windowStart + windowMs
-      : this.slidingRetryAt(entry, max, windowStart, windowMs);
-
-    return {
-      allowed,
-      limit: max,
-      remaining: Math.max(0, Math.floor(max - used)),
-      count: Math.ceil(used),
-      resetAt,
-      retryAfterSeconds: allowed ? 0 : secondsUntil(resetAt, now),
-    };
+    return slidingWindowResult(entry.previous, entry.count, allowed, max, windowMs, now);
   }
 
-  private slidingRetryAt(
-    entry: WindowEntry,
-    max: number,
-    windowStart: number,
-    windowMs: number,
-  ): number {
-    if (entry.count + 1 <= max) {
-      const fraction = 1 - (max - entry.count - 1) / entry.previous;
-      return windowStart + Math.ceil(windowMs * fraction);
+  private consumeBucket(entry: BucketEntry, request: RateLimitConsumeRequest): RateLimitResult {
+    const { max, windowMs, now } = request;
+    entry.tokens = Math.min(max, entry.tokens + (Math.max(0, now - entry.refilledAt) * max) / windowMs);
+    entry.refilledAt = now;
+    const allowed = entry.tokens >= 1;
+    if (allowed) {
+      entry.tokens -= 1;
     }
-    const nextStart = windowStart + windowMs;
-    const fraction = Math.max(0, 1 - (max - 1) / entry.count);
-    return nextStart + Math.ceil(windowMs * fraction);
+    return tokenBucketResult(entry.tokens, allowed, max, windowMs, now);
   }
 }
 

@@ -52,24 +52,31 @@ src/
     tls.ts                    # JA3/JA4 lists, UA mismatch, TLS browser-profile checks
     tlsClientHello.ts         # ClientHello parser, local JA3/JA4, trackTlsClientHellos
     timezone.ts               # TZ offset + accept-language checks
-    protect.ts                # createBotProtection: ordered rules, decision, middleware
-    htmlInjection.ts          # streaming honeytoken injection into HTML responses
+    protect.ts                # createBotProtection: ordered rules, decision, middleware, fetch adapter
+    htmlInjection.ts          # streaming trap-markup injection into node:http and fetch Responses
     tripwire.ts               # scanner bait paths + path canonicalisation
     honeytoken.ts             # HMAC honeytoken link, HTML injection, form honeypot field
+    decoy.ts                  # HMAC decoy API endpoint + canary API key, inert JSON config
+    webBotAuth.ts             # Web Bot Auth (RFC 9421) verifier, directory cache, nonce replay
+    structuredFields.ts       # RFC 8941 dictionary parser for Signature-Input / Signature
+    crawlerRanges.ts          # published crawler IP-range verification (data/crawler_ip_ranges.json)
     bots.ts                   # registry classification, bot policy, robots.txt
     botRegistry.ts            # 186-agent table ported from WebDecoy (order is significant)
     attackSignatures.ts       # narrow SQLi/XSS/traversal/shell/JNDI signatures
-    rateLimit.ts              # fixed/sliding windows, bounded memory store, store interface
+    rateLimit.ts              # fixed/sliding/token-bucket, bounded memory store, store interface
+    rateLimitStores.ts        # Redis (Lua, any client) and Upstash REST stores
     clientIp.ts               # right-to-left proxy trust, CIDR matching, public-IP test
     types.ts
 data/                         # bundled blocklists (shipped in npm package)
 docs/                         # GitHub Pages demo source (index.html + app.js)
 scripts/build-site.ts         # builds .pages/ with dist/browser.js + stamped asset URLs
 scripts/update-ip-data.ts     # fetches and writes data/*.csv
+scripts/update-crawler-ranges.ts # fetches published crawler ranges into data/crawler_ip_ranges.json
 test/                         # vitest unit + patchright browser tests
   fixtures/harness.html         # DOM fixtures for browser tests
   helpers/                      # test server + patchright harness
   patchright/                   # real Chromium tests via patchright
+  playwright/                   # stock Playwright detection on Windows
 .github/workflows/
   ci.yml                      # typecheck + unit + patchright + build (Node 22+)
   pages.yml                   # build .pages/ and deploy via GitHub Pages Actions
@@ -85,17 +92,21 @@ npm run typecheck
 npm test                    # unit tests (vitest, mocked window)
 npm run test:coverage       # unit tests + 100% coverage gate
 npm run test:patchright     # browser tests (patchright + real Chromium)
-npm run test:all            # unit + patchright
+npm run test:playwright     # stock Playwright detection suite
+npm run test:all            # unit + patchright + playwright
 npm run build
 npm run lint:package        # publint + Are The Types Wrong
-npm run check               # typecheck + coverage + patchright + build + package lint
+npm run check               # typecheck + coverage + patchright + playwright + build + package lint
 npm run build:site        # GitHub Pages artifact in .pages/
 npm run update:ip-data    # refresh data/*.csv from upstream sources
+npm run update:crawler-ranges # refresh data/crawler_ip_ranges.json from the operators' published lists
 ```
 
 Always run `npm run check` before committing.
 
-Patchright browser tests require `npx patchright install chromium` once after install.
+Patchright browser tests require `npx patchright install chromium` once after install, and the
+Playwright suite `npx playwright install chromium`. The Redis rate-limit scripts are exercised
+through `ioredis-mock`, which runs the Lua for real, so no Redis server is needed for the tests.
 The browser bundle (`dist/browser.js`, entry `src/browser.ts`) is injected into Patchright's
 isolated execution context via blob URL import — page scripts in the main world are not visible
 to `page.evaluate`.
@@ -160,8 +171,9 @@ touch.
 ## Request protection
 
 `createBotProtection` evaluates rules in a fixed order — `test-trigger`,
-`honeytoken`, `tripwire`, `trap-lockout`, `attack-signatures`, `bots`, rate limits,
-`detection` — and records an outcome for every rule (`RUN`, `DRY_RUN`, `NOT_RUN`).
+`web-bot-auth`, `honeytoken`, `decoy`, `tripwire`, `trap-lockout`,
+`attack-signatures`, `bots`, rate limits, `detection` — and records an outcome for
+every rule (`RUN`, `DRY_RUN`, `NOT_RUN`).
 The first `RUN` outcome whose action is not `ALLOW` decides. Keep these invariants
 when changing it:
 
@@ -173,10 +185,26 @@ when changing it:
   rate-limit paths) succeed on any reading, case-insensitively; skip paths only
   when every reading matches.
 - The honeytoken must be armed before it is advertised: injection and matching
-  both read `honeytoken.current()`; `robotsTxt()` disallows it. Only an
-  edge-verified crawler is exempt. Cross-site, same-site, subresource and
+  both read `honeytoken.current()`; `robotsTxt()` disallows it. The decoy
+  endpoint and canary key follow the same rules and are recorded with
+  `honeytoken: true`. Only a verified crawler is exempt — verified by the
+  request context, the trusted edge header, a Web Bot Auth signature, or the
+  operator's published IP ranges, in that order of precedence
+  (`decision.crawlerVerificationSource`). Cross-site, same-site, subresource and
   prefetch requests are never recorded as trap hits (no lockout poisoning), and
   dry-run hits are never recorded.
+- Web Bot Auth verification is synchronous and never awaits the network:
+  directories are fetched by `refresh()` (at construction and in the background
+  when stale), each directory keeps its last good keys, and only curated
+  directory URLs are fetched — never one taken from the request. Impersonation
+  maps to `crawlerVerificationStatus: "spoofed"`; unknown keys, malformed headers
+  and replayed nonces are `claimed`, never `impersonation`.
+- Published-range verification yields `verified` or `unverified` by default;
+  `spoofed` only with `crawlerRanges.outsideRanges: "spoofed"`, because a bundled
+  list can lag a new range and `crawler-identity-spoofed` weighs 0.95.
+- Redis rate-limit scripts must keep producing exactly what `MemoryRateLimitStore`
+  does for the same request sequence (the parity test in
+  `test/rateLimitStores.test.ts` runs both); refused requests are never counted.
 - Clients are keyed by `clientNetworkKey`: the IPv4 address, or the IPv6 /64.
 - Never read the leftmost `X-Forwarded-For` entry. `resolveClientIp` counts
   trusted hops from the right.
@@ -186,6 +214,8 @@ when changing it:
   when no `Content-Length` is declared; buffers (up to 2 MB) and adjusts the
   length when one is. It never restores the original `writeHead`/`write`/`end`,
   because later middleware (sessions, compression) may have wrapped them.
+  `injectMarkupIntoFetchResponse` applies the same scan to a WHATWG `Response`
+  body through a `TransformStream` and drops `Content-Length`.
 - `botRegistry.ts` is generated from WebDecoy's registry; do not sort it (first
   match wins). `matchBotUserAgent` ignores app names inside browser-shaped UAs
   with no crawler declaration, so in-app browsers are not read as crawlers.
@@ -195,7 +225,8 @@ when changing it:
 
 ## IP blocklists
 
-**Do not hand-edit** `data/*.csv`. Update `scripts/update-ip-data.ts` instead.
+**Do not hand-edit** `data/*.csv` or `data/crawler_ip_ranges.json`. Update
+`scripts/update-ip-data.ts` or `scripts/update-crawler-ranges.ts` instead.
 
 | File | Source |
 |------|--------|

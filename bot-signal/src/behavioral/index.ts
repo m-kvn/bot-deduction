@@ -18,6 +18,7 @@ const DEFAULT_MIN_OBSERVATION_MS = 3_000;
 const DEFAULT_SCORE_THRESHOLD = 0.55;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_SAMPLE_WINDOW_MS = 60_000;
+const APPLE_PLATFORM = /^(?:mac|iphone|ipad|ipod)/i;
 
 type Listener = {
   target: EventTarget;
@@ -78,6 +79,8 @@ export function createBehavioralClientDetector(
   let isActive = false;
   let observeTimer: ReturnType<typeof setTimeout> | undefined;
   let observeResolve: ((result: BehavioralClientResult) => void) | undefined;
+  let lastPointerDown: { pointerType: string; pressure: number } | undefined;
+  const reportsPointerPressure = !APPLE_PLATFORM.test(context.navigator?.platform ?? "");
 
   const pruneRetainedSamples = (now = Date.now()): void => {
     if (!Number.isFinite(sampleWindowMs)) {
@@ -183,12 +186,24 @@ export function createBehavioralClientDetector(
     });
   };
 
+  const onPointerDown = (event: Event): void => {
+    const pointerEvent = event as PointerEvent;
+    lastPointerDown =
+      reportsPointerPressure && pointerEvent.button === 0
+        ? { pointerType: pointerEvent.pointerType, pressure: pointerEvent.pressure }
+        : undefined;
+  };
+
   const recordButton = (event: Event, kind: "down" | "up"): void => {
     const mouseEvent = event as MouseEvent;
     if (mouseEvent.button !== 0) {
       return;
     }
 
+    const pointer = kind === "down" ? lastPointerDown : undefined;
+    if (kind === "down") {
+      lastPointerDown = undefined;
+    }
     record<ButtonSample>(samples.buttons, {
       kind,
       x: mouseEvent.clientX,
@@ -197,6 +212,7 @@ export function createBehavioralClientDetector(
       screenY: mouseEvent.screenY,
       t: Date.now(),
       isTrusted: mouseEvent.isTrusted,
+      ...pointer,
     });
   };
 
@@ -265,6 +281,7 @@ export function createBehavioralClientDetector(
     addListener(context, "keydown", onKeyDown);
     addListener(context, "keyup", onKeyUp);
     addListener(context, "click", onClick);
+    addListener(context, "pointerdown", onPointerDown);
     addListener(context, "mousedown", onMouseDown);
     addListener(context, "mouseup", onMouseUp);
     addListener(context, "touchstart", onTouchStart);
@@ -394,6 +411,7 @@ export {
   hasInjectedKeyInput,
   hasRepeatedTypingCadence,
   hasSyntheticKeyDwell,
+  hasSyntheticPointerPressure,
   hasAbsentKeyRollover,
   hasZeroJitterClicks,
   hasNoMouseActivity,

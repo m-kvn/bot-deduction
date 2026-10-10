@@ -100,7 +100,9 @@ app.use(protection.middleware({ serveRobotsTxt: true }));
 // req.botSignal is the typed decision: conclusion, deciding rule, every rule's outcome
 ```
 
-Works with Express, Connect and plain `node:http` (`await protection.handle(req, res)`).
+Works with Express, Connect and plain `node:http` (`await protection.handle(req, res)`), and with
+any fetch-API runtime — Hono, Next.js, Bun, Deno, Workers — through `await protection.check(request)`
+(see [Fetch-API runtimes](#fetch-api-runtimes)).
 
 ### Behavioral — catch scripted interaction
 
@@ -322,12 +324,14 @@ request, in order, and returns one typed decision:
 | Rule | Default | What it catches | Refusal |
 |---|---|---|---|
 | `test-trigger` | on | `BotSignal-Test/…` User-Agent — `curl -A "BotSignal-Test/1.0"` proves enforcement is installed | 403 |
+| `web-bot-auth` | off (`webBotAuth`) | A Web Bot Auth signature (RFC 9421, tag `web-bot-auth`) that claims a trusted agent's key and fails verification — an impersonation. A signature that verifies marks the request as a verified agent instead | 403 |
 | `honeytoken` | on | The hidden link injected into every HTML response (`hidden`, `aria-hidden`, `tabindex="-1"`, `rel="nofollow noindex"`, off-screen), at a path derived by HMAC from `honeytoken.secret` so every replica arms the same one. Only a link harvester requests it | 404 |
+| `decoy` | off (`decoy`) | A call to the decoy API endpoint, or any request presenting the canary API key — both exist only in an inert JSON config injected next to the honeytoken, and in `robots.txt`, so only code that mines a page for endpoints and keys finds them | 404 |
 | `tripwire` | on | Scanner bait — `/.env*`, `/.git/`, `/.aws/`, `/wp-config.php`, SQL dumps, `/actuator/env` — matched after percent-decoding and dot-segment resolution, so `//x/..%2f.git/config` still trips | 404 |
 | `trap-lockout` | off (`tripwire.lockoutMs`) | Every request from an address that tripped a trap within the window | 403 |
 | `attack-signatures` | on, dry run | A narrow set of SQLi, XSS, traversal, shell and Log4Shell payloads that need real SQL or shell context, in the path and query (decoded per escape, head and tail of oversized input); body and headers opt-in, cookies never. Enforce with `attackSignatures: { dryRun: false }` | 403 |
 | `bots` | off (`bots: { deny }`) | Registry agents by category (`training_crawler`), name (`GPTBot`) or `"ai"`; `allow` always wins | 403 |
-| `rate-limit` | off (`rateLimit`) | Fixed or sliding windows per client — an IPv4 address or an IPv6 /64 — or per your `key`, scoped by `paths` (matched case-insensitively against every reading of the target, absolute-form included) and `methods` | 429 + `Retry-After` |
+| `rate-limit` | off (`rateLimit`) | Fixed windows, sliding windows or token buckets per client — an IPv4 address or an IPv6 /64 — or per your `key`, scoped by `paths` (matched case-insensitively against every reading of the target, absolute-form included) and `methods`; in memory or in a shared Redis / Upstash store | 429 + `Retry-After` |
 | `detection` | off (`detection: true`) | `detectServerClientAsync` on the request's headers, IP and tracked ClientHello; dry run unless `detection: { dryRun: false }` | 403 |
 
 ```ts
@@ -338,6 +342,8 @@ decision.blocked;    // true only in enforce mode
 decision.rule;       // the deciding rule, e.g. "honeytoken"
 decision.results;    // every rule: { rule, state: "RUN" | "DRY_RUN" | "NOT_RUN", action, reason }
 decision.bot;        // registry classification of the User-Agent
+decision.agent;      // Web Bot Auth verdict: none | verified | impersonation | claimed
+decision.crawlerVerification; // verified | spoofed | unverified, and crawlerVerificationSource
 decision.trap;       // this address's trap record, if it has walked into one
 ```
 
@@ -351,9 +357,11 @@ decision.trap;       // this address's trap record, if it has walked into one
   `ERROR` and lets the request through. A quiet `ALLOW` always means "checked".
 - `robots.txt` (`serveRobotsTxt: true`, or `protection.robotsTxt()`) disallows the
   honeytoken path and publishes the bot policy from the same object that
-  enforces it, so a real search crawler never requests the trap. Only a crawler
-  your edge *verified* is exempt from a trap: claiming to be Googlebot is the
-  commonest scraper disguise, so the claim alone earns nothing.
+  enforces it, so a real search crawler never requests the trap. Only a
+  *verified* crawler is exempt from a trap — verified by your edge, by a Web Bot
+  Auth signature, or by coming from the IP ranges its operator publishes.
+  Claiming to be Googlebot is the commonest scraper disguise, so the claim alone
+  earns nothing.
 - A trap is only attributed to a request the client made itself. Cross-site and
   same-site requests, embedded subresources (`Sec-Fetch-Dest` image, script,
   style, frame…) and prefetch/prerender are answered but never recorded, so
@@ -374,10 +382,97 @@ hop count (the client is that many entries from the *right* of
 used — it is the one value in that header the client writes itself.
 
 **Rate-limit state** lives in a bounded in-memory store by default, which is
-correct for one process. With several replicas pass a shared `store` — anything
-with an atomic `consume({ key, max, windowMs, algorithm, now })` returning
-`{ allowed, limit, remaining, count, resetAt, retryAfterSeconds }`. Refused
-requests do not consume budget, so `Retry-After` is accurate.
+correct for one process. With several replicas pass a shared `store`:
+
+```ts
+import { createRedisRateLimitStore, createUpstashRateLimitStore } from "bot-signal/server";
+
+// ioredis
+const store = createRedisRateLimitStore({
+  evaluate: (script, keys, args) => redis.eval(script, keys.length, ...keys, ...args),
+});
+// node-redis: evaluate: (script, keys, args) => client.eval(script, { keys, arguments: args })
+// Upstash, over its REST API with plain fetch:
+const edgeStore = createUpstashRateLimitStore({ url: process.env.UPSTASH_REDIS_REST_URL, token: process.env.UPSTASH_REDIS_REST_TOKEN });
+
+createBotProtection({
+  rateLimit: { max: 20, windowMs: 60_000, algorithm: "token-bucket", store, onStoreError: "closed" },
+});
+```
+
+Each algorithm is one Lua script, so a check and its increment are atomic across
+replicas, and every key is hash-tagged for Redis Cluster. The scripts reproduce
+the in-memory arithmetic exactly — the test suite runs the same request
+sequence through both and compares the results. `algorithm` is `"fixed"`,
+`"sliding"` (weighted previous window) or `"token-bucket"` (a burst of `max`,
+refilled at `max` per `windowMs`). A store that errors is `NOT_RUN` and lets the
+request through, unless the rule says `onStoreError: "closed"`, which answers 429
+instead. Any object with an atomic `consume({ key, max, windowMs, algorithm, now })`
+returning `{ allowed, limit, remaining, count, resetAt, retryAfterSeconds }` works
+as a store, and `fixedWindowResult`, `slidingWindowResult` and `tokenBucketResult`
+turn raw counts into that shape. Refused requests do not consume budget, so
+`Retry-After` is accurate.
+
+**Signed agents (Web Bot Auth).** Browsing agents such as ChatGPT's and Google's
+sign their requests with HTTP Message Signatures (RFC 9421, tag `web-bot-auth`)
+using keys published at `/.well-known/http-message-signatures-directory`.
+`webBotAuth: true` verifies them in-process:
+
+```ts
+createBotProtection({
+  webBotAuth: {
+    // directories default to OpenAI ChatGPT and Google Agent; pass [] to stay offline
+    keys: [{ name: "Partner crawler", category: "monitoring", jwk: partnerPublicJwk }],
+    onImpersonation: "deny", // default
+    onClaimed: "allow",      // unknown signers are not proof of abuse
+    allowCategories: ["ai_agent"],
+  },
+});
+```
+
+- **verified** — the signature checks out against a trusted key, binds the host
+  (`@authority` or `@target-uri`), and sits inside its `created`/`expires` window
+  and the key's validity. The request counts as a verified crawler: traps do not
+  attribute it, and server detection receives `crawlerVerificationStatus: "verified"`.
+- **impersonation** — a known agent's key, but the signature fails, has expired,
+  names the wrong algorithm, or the key is outside its validity. Denied by
+  default and reported to detection as a `spoofed` crawler identity.
+- **claimed** — a signature from an unknown key, a malformed header, a component
+  that cannot be rebuilt, or a nonce already seen. Not proof of anything; allowed
+  unless you set `onClaimed: "deny"`.
+
+Verification never waits on the network. Directories are fetched at startup and
+refreshed in the background (stale keys keep serving, and a directory that fails
+keeps its last good keys); only the curated directory list is ever fetched — a
+request's own `Signature-Agent` header never chooses a URL. Behind a proxy that
+terminates TLS the signature is also checked against the other scheme, and with
+`trustProxy` set `X-Forwarded-Host`/`X-Forwarded-Proto` rebuild the signed URL.
+Ed25519 and RSA-PSS-SHA512 keys are supported; key ids are RFC 7638 thumbprints.
+
+**Verified crawlers from published IP ranges.** Google, Bing, OpenAI, Perplexity,
+Apple, Common Crawl, DuckDuckGo, Ahrefs and Mistral publish the addresses their
+crawlers use. `data/crawler_ip_ranges.json` bundles them (refresh with
+`npm run update:crawler-ranges`), and protection checks a request whose
+User-Agent claims one of those crawlers against its operator's ranges — on by
+default, no network at request time. Inside the ranges it is `verified`; outside
+them it is `unverified` rather than `spoofed`, because a bundled list can lag a
+newly announced range and a false "spoofed" Googlebot is an SEO incident. Opt in
+to the stricter reading with `crawlerRanges: { outsideRanges: "spoofed" }`.
+
+**Decoy API and canary key.** `decoy: { secret }` derives two more traps from the
+same kind of HMAC as the honeytoken: an API path (`/api/internal/3f9a…`) and a
+credential (`key_live_…`). Both are published in an inert
+`<script type="application/json" id="api-config">` block injected beside the
+honeytoken link, and the path is listed in `robots.txt`. No page code reads it,
+so a call to that endpoint — or a request carrying that key in a header, the
+query string or the body — comes from something that mined the page for
+endpoints. `Referer`, `Origin` and `Cookie` are not searched: a browser fills
+those in itself, so a lure link with the key in its query string must not taint
+every later request from the page it opened. Those hits are recorded like
+honeytoken hits (`trapHit.matchedBy` is `"decoy-endpoint"` or
+`"canary-credential"`), under the same attribution rules.
+`protection.trapMarkup()` returns the markup for server-rendered pages that
+place it themselves.
 
 **Form honeypot.** `createHoneypotField()` renders an off-screen, `aria-hidden`,
 `tabindex="-1"`, `autocomplete="off"` input with a deliberately neutral name
@@ -386,9 +481,51 @@ heuristic recognises it; `field.isFilled(value)` on submit. A bot that fills
 every input fills it.
 
 Every piece is exported on its own as well: `createTripwire`, `createHoneytoken`
-+ `injectHoneytokenLink`, `createHoneypotField`, `createBotPolicy` +
++ `injectHoneytokenLink`, `createDecoy`, `createHoneypotField`, `createBotPolicy` +
 `buildRobotsTxt` + `classifyBotUserAgent`, `findAttackSignature`,
-`createRateLimiter` + `MemoryRateLimitStore`, and `resolveClientIp`.
+`createRateLimiter` + `MemoryRateLimitStore` + `createRedisRateLimitStore` +
+`createUpstashRateLimitStore`, `createAgentVerifier`, `createCrawlerRangeVerifier`,
+`injectMarkupIntoFetchResponse`, and `resolveClientIp`.
+
+#### Fetch-API runtimes
+
+`protection.check(request)` takes a WHATWG `Request` and returns the decision plus
+a ready-made `Response` when the request is refused (or is `/robots.txt` with
+`serveRobotsTxt`). `protection.injectTraps(response)` streams the honeytoken and
+decoy markup into an HTML `Response` before its `</body>`, leaving other responses
+untouched.
+
+```ts
+// Hono (Node, Bun, Deno, Workers with nodejs_compat)
+app.use(async (c, next) => {
+  const { response } = await protection.check(c.req.raw, {
+    ip: c.req.header("cf-connecting-ip"),
+    serveRobotsTxt: true,
+  });
+  if (response) return response;
+  await next();
+  c.res = protection.injectTraps(c.res);
+});
+
+// Next.js middleware (runtime: "nodejs")
+export async function middleware(request: NextRequest) {
+  const { response } = await protection.check(request);
+  return response ?? NextResponse.next();
+}
+```
+
+`inspectBody: true` hands a bounded copy of the body (16 KiB by default,
+`maxBodyBytes`) to the attack signatures without consuming the original stream.
+
+#### Fastify
+
+```ts
+fastify.addHook("onRequest", async (request, reply) => {
+  const decision = await protection.handle(request.raw, reply.raw, { serveRobotsTxt: true });
+  if (decision.responded) return reply.hijack();
+  request.botSignal = decision;
+});
+```
 
 ---
 
@@ -521,6 +658,12 @@ diagnostic objects.
 | `linear-scroll` | 0.30 | medium | Uniform scroll deltas/timing |
 | `linear-typing` | 0.35 | high | Robotic or superhuman intervals (key auto-repeat excluded) |
 | `repeated-typing-cadence` | 0.55 | high | A short programmed delay template repeats across varied keystrokes |
+| `generated-pointer-path` | 0.60 | high | Pointer reaches trace a generated curve (Bézier/ghost-cursor style) instead of a hand's path |
+| `injected-key-input` | 0.70 | high | Printable keys arrive with an empty `code` or `keyCode` 231 (`VK_PACKET`), i.e. OS-level text injection |
+| `zero-jitter-clicks` | 0.30 | medium | Every measured click released on the exact pixel it pressed, or faster than a finger can |
+| `synthetic-pointer-pressure` | 0.45 | medium | Trusted mouse `pointerdown` events report `pressure` 0, which Puppeteer, Selenium/ChromeDriver and raw CDP `Input.dispatchMouseEvent` produce; a pressed mouse button reports 0.5. Not recorded on Apple platforms |
+| `synthetic-key-dwell` | 0.60 | high | Keys released as fast as they were pressed, with no hold a finger could make |
+| `absent-key-rollover` | 0.30 | medium | Fast typing where no two keys were ever down together |
 | `synthetic-events` | 0.50 | high | `isTrusted === false` |
 
 Touch devices are scored, not just tolerated: swipe paths and tap rhythm go

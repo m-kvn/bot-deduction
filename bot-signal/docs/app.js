@@ -3,6 +3,7 @@ import {
   createBehavioralClientDetector,
   detectInstantClient,
   detectInstantClientAsync,
+  VERSION,
 } from "./browser.js";
 
 const $ = (id) => document.getElementById(id);
@@ -322,6 +323,21 @@ async function runAsync() {
 }
 
 $("run-instant").addEventListener("click", () => runInstant());
+$("copy-detection").addEventListener("click", (event) => {
+  if (!lastResult) runInstant();
+  copyText(JSON.stringify({
+    version: VERSION,
+    url: location.href,
+    navigator: {
+      userAgent: navigator.userAgent,
+      appVersion: navigator.appVersion,
+      platform: navigator.platform,
+      webdriver: navigator.webdriver,
+      brands: navigator.userAgentData?.brands,
+    },
+    result: lastResult,
+  }, null, 2), event.currentTarget);
+});
 $("run-async").addEventListener("click", () => {
   runAsync();
 });
@@ -571,6 +587,9 @@ async function observe(durationMs = 5_000) {
   const button = $("observe-btn");
   button.disabled = true;
   setBanner("behavioral", "pending", "Observing…", "Move or swipe, scroll, tap, and type like you normally would");
+
+  // Defer until the click that triggered us has finished dispatching.
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   const detector = createBehavioralClientDetector({
     context: window,

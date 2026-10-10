@@ -47,6 +47,14 @@ const statsStatement = db.prepare(
   "SELECT verdict, COUNT(*) AS count FROM submissions GROUP BY verdict",
 );
 
+const getStatement = db.prepare("SELECT record FROM submissions WHERE id = ?");
+
+const updateStatement = db.prepare("UPDATE submissions SET record = ? WHERE id = ?");
+
+const labeledStatement = db.prepare(
+  "SELECT record FROM submissions WHERE json_extract(record, '$.label') IS NOT NULL",
+);
+
 export function insertSubmission(record) {
   insertStatement.run(
     record.id,
@@ -79,8 +87,25 @@ export function countByVerdict() {
   return { total: counts.human + counts.agent, humans: counts.human, agents: counts.agent };
 }
 
+export function getSubmission(id) {
+  const row = getStatement.get(id);
+  return row ? JSON.parse(row.record) : null;
+}
+
+export function updateSubmission(record) {
+  updateStatement.run(JSON.stringify(record), record.id);
+}
+
+export function labeledSubmissions() {
+  return labeledStatement.all().map((row) => JSON.parse(row.record));
+}
+
 export function clearSubmissions() {
   db.exec("DELETE FROM submissions");
+}
+
+export function closeDatabase() {
+  if (db.isOpen) db.close();
 }
 
 export const dbFile = file;

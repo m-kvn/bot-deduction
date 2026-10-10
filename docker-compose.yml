@@ -1,0 +1,22 @@
+services:
+  bot-signal-demo:
+    build: .
+    image: bot-signal-demo:local
+    ports:
+      - "8787:8787"
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN (16+ characters) to protect the dashboard}
+      HONEYTOKEN_SECRET: ${HONEYTOKEN_SECRET:-}
+      PROTECTION_MODE: ${PROTECTION_MODE:-enforce}
+      TRUST_EDGE_HEADERS: ${TRUST_EDGE_HEADERS:-}
+      RATE_LIMIT_STORE: ${RATE_LIMIT_STORE:-memory}
+      UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL:-}
+      UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN:-}
+      DEMOTED_SIGNALS: ${DEMOTED_SIGNALS:-}
+    volumes:
+      - submissions:/data
+    restart: unless-stopped
+    stop_grace_period: 15s
+
+volumes:
+  submissions:

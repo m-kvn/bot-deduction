@@ -3055,6 +3055,17 @@ describe("android in desktop-site mode", () => {
     expect(isTouchPrimaryDevice(createContext())).toBe(false);
   });
 
+  it("falls back to a desktop when the pointer media query cannot be asked", () => {
+    expect(isTouchPrimaryDevice({ ...createDevice(), matchMedia: undefined } as unknown as ExtendedWindow)).toBe(false);
+    const blocked = {
+      ...createDevice(),
+      matchMedia: () => {
+        throw new Error("blocked");
+      },
+    } as unknown as ExtendedWindow;
+    expect(isTouchPrimaryDevice(blocked)).toBe(false);
+  });
+
   it("does not call a phone GPU a mismatch when the hardware is a phone", () => {
     expect(isGpuPlatformMismatch(createDevice())).toBe(false);
     expect(isGpuPlatformMismatch(createDevice({ renderer: "Mali-G715" }))).toBe(false);

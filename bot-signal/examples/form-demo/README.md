@@ -8,7 +8,7 @@ submission with its verdict.
 | Instant | Browser, on page load | Headless Chrome, Playwright/Puppeteer/Selenium artifacts, spoofed fingerprints |
 | Behavioral | Browser, while the form is filled | Synthetic events, linear mouse/typing, no mouse activity, teleporting cursor |
 | Server | Node, on POST | Scripting/bot User-Agent, datacenter + abuse-listed IP, TLS (JA3/JA4) mismatch, timezone/header mismatch |
-| Request protection | Node, every request | Scanner bait paths, the hidden honeytoken link, the hidden `hp_check` field, attack payloads, AI training crawlers, request floods |
+| Request protection | Node, every request | Scanner bait paths, the hidden honeytoken link, the decoy API endpoint and canary key, the hidden `hp_check` field, attack payloads, AI training crawlers, forged Web Bot Auth signatures, request floods |
 
 The three scores combine into one verdict (`1 - Π(1 - scoreᵢ)`); a submission is an **agent** if any
 layer rejects it, or if the form was posted without running the page JavaScript.
@@ -66,7 +66,33 @@ node examples/form-demo/server.mjs
    ```
    Each one appears under **Request protection** on the dashboard. The honeytoken path is in the
    page source as a hidden link; request it with the page cookie and that page session's next
-   submission is rejected on `client:honeytoken-tripped`.
+   submission is rejected on `client:honeytoken-tripped`. The page also carries an inert
+   `<script type="application/json" id="api-config">` with a decoy API base and a canary API key
+   that no page code reads: call that endpoint, or send that key in a request header (other than the
+   browser-supplied `Referer`, `Origin` and `Cookie`), the query string or the body,
+   and the request is refused and logged as `decoy`, and that page session's next submission is
+   rejected on `client:decoy-api-tripped`.
+
+## Review false positives
+
+Every row on the dashboard has **Human** / **Agent** buttons. A label is ground truth for that
+submission: it never rewrites the verdict, but a held submission (`outcome: review`) becomes
+`released` or `discarded`. The **Signal precision** card then shows, for every signal that fired on a
+labelled submission, how often it fired on people versus agents. A signal that keeps firing on people
+is a false-positive source on *your* traffic; list it in `DEMOTED_SIGNALS` (comma-separated ids, any
+layer) and it is still recorded and shown as `demoted`, but no longer counts towards the verdict or
+as hard evidence.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/submissions/:id/review` | `{ "label": "human" \| "agent" }` |
+| `GET /api/signal-stats` | Per-signal counts on labelled submissions, false positives and misses |
+| `GET /healthz` | Liveness — always 200 while the process runs; skipped by request protection |
+| `GET /readyz` | Readiness — 200 once listening with the database reachable, 503 while draining |
+
+The dashboard APIs (`/api/submissions`, `/api/protection`, `/api/signal-stats`, `/api/reset` and the
+review endpoint) are open by default for local use. Set `ADMIN_TOKEN` (16+ characters) and they
+require `Authorization: Bearer <token>`; the dashboard asks for it once per browser tab.
 
 ## Visitors abroad, travellers and VPNs
 
@@ -107,8 +133,18 @@ followed the honeytoken, self-declared registry agents, JA4 handshake shape, and
 behavioral results forwarded from the page. Prints PASS/FAIL per case, then a second table of
 request-protection checks: the injected honeytoken and honeypot field, `robots.txt`, the tripwire log,
 attack signatures, the bot policy, the installation probe, the verified-crawler exemption, an
-unverified Googlebot claim, cross-site attribution, an absolute-form target against the submit limit, the submit
-rate limit, and native JA4 over HTTPS using the test certificate in `test/fixtures/`.
+unverified Googlebot claim, cross-site attribution, the decoy endpoint and canary key (refused, logged,
+and flagging the page session that mined them), a signed agent verified with a pinned Web Bot Auth key,
+a forged signature refused as impersonation, Googlebot verified by Google's published ranges, health
+checks that bypass protection with admin APIs behind `ADMIN_TOKEN`, operator labels feeding signal
+precision, `DEMOTED_SIGNALS`, a token-bucket submit limit, an absolute-form target against the submit
+limit, the submit rate limit, and native JA4 over HTTPS using the test certificate in `test/fixtures/`.
+
+Signed agents: `WEB_BOT_AUTH=1` verifies Web Bot Auth signatures against the published OpenAI and
+Google agent directories (fetched at startup and refreshed in the background — off by default so the
+demo makes no outbound calls), and `WEB_BOT_AUTH_KEYS` pins keys offline as a JSON array of
+`{ "name", "category", "jwk" }`. Crawlers that claim Googlebot, Bingbot, GPTBot and the other agents
+with published IP ranges are verified against `data/crawler_ip_ranges.json` without any setting.
 
 TLS options are off by default because plain Node sees no TLS fingerprint. Enable them with
 `SUSPICIOUS_TLS` (comma-separated hashes), `SUSPICIOUS_TLS_ENTRIES` (JSON `TlsFingerprintEntry[]` —
@@ -130,6 +166,28 @@ crawler-verification headers before writing its own trusted values. The safe def
   JA3/JA4 from the ClientHello itself.
 - Request protection: `createBotProtection()` from `bot-signal/server`, run before routing — see
   `handleRequest` in `server.mjs` (or `app.use(protection.middleware())` in Express).
+
+## Run it in production
+
+From the repo root, `docker compose up --build` builds the image (`Dockerfile`: multi-stage, runs as
+the unprivileged `node` user, health-checked on `/readyz`) and keeps the SQLite file on the
+`submissions` volume. Compose refuses to start without `ADMIN_TOKEN`:
+
+```bash
+ADMIN_TOKEN=$(openssl rand -hex 24) docker compose up --build
+```
+
+- **Configuration is validated at startup.** A malformed number, an unknown choice, half a TLS key
+  pair, a short `ADMIN_TOKEN` or an unusable `WEB_BOT_AUTH_KEYS` entry stops the process with every
+  problem listed, instead of running with a silently defaulted value.
+- **Shutdown drains.** `SIGTERM`/`SIGINT` flips `/readyz` to 503, stops accepting connections, lets
+  in-flight requests finish (up to `SHUTDOWN_TIMEOUT_MS`, default 10 s), then closes the rate-limit
+  store and the database.
+- **Several replicas** need shared rate-limit state: `RATE_LIMIT_STORE=upstash` with
+  `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`, and a shared `HONEYTOKEN_SECRET` so every
+  replica derives the same honeytoken, decoy endpoint and canary key. `RATE_LIMIT_ALGORITHM` picks
+  `sliding` (default), `fixed` or `token-bucket`; `RATE_LIMIT_ON_STORE_ERROR=closed` refuses instead
+  of failing open when the store is unreachable.
 
 ## Storage
 

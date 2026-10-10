@@ -1,0 +1,428 @@
+{
+  "browser": "149.0.7827.55",
+  "headless": true,
+  "cases": {
+    "patchright page.mouse.click": [
+      {
+        "type": "pointerdown",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0.5,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 1,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mousedown",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 1,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "pointerup",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 0,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mouseup",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "click",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      }
+    ],
+    "patchright locator.click": [
+      {
+        "type": "pointerdown",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0.5,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 1,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mousedown",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 1,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "pointerup",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 0,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mouseup",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "click",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      }
+    ],
+    "raw CDP Input.dispatchMouseEvent (no force)": [
+      {
+        "type": "pointerdown",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 1,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mousedown",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 1,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "pointerup",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 0,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mouseup",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "click",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      }
+    ],
+    "raw CDP Input.dispatchMouseEvent (force 0.5)": [
+      {
+        "type": "pointerdown",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0.5,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 1,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mousedown",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 1,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "pointerup",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 0,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mouseup",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "click",
+        "isTrusted": true,
+        "pointerType": "mouse",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 1,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": false
+        },
+        "webkitForce": null
+      }
+    ],
+    "CDP Input.dispatchTouchEvent tap": [
+      {
+        "type": "pointerdown",
+        "isTrusted": true,
+        "pointerType": "touch",
+        "pressure": 1,
+        "width": 2,
+        "height": 2,
+        "tiltX": 0,
+        "pointerId": 2,
+        "buttons": 1,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "pointerup",
+        "isTrusted": true,
+        "pointerType": "touch",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 2,
+        "buttons": 0,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      },
+      {
+        "type": "mousedown",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 1,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": true
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "mouseup",
+        "isTrusted": true,
+        "pointerType": null,
+        "pressure": null,
+        "width": null,
+        "height": null,
+        "tiltX": null,
+        "pointerId": null,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": true
+        },
+        "webkitForce": null
+      },
+      {
+        "type": "click",
+        "isTrusted": true,
+        "pointerType": "touch",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": 2,
+        "buttons": 0,
+        "detail": 1,
+        "sourceCapabilities": {
+          "firesTouchEvents": true
+        },
+        "webkitForce": null
+      }
+    ],
+    "element.click() (synthetic)": [
+      {
+        "type": "click",
+        "isTrusted": false,
+        "pointerType": "",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": -1,
+        "buttons": 0,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      }
+    ],
+    "keyboard Enter on focused button": [
+      {
+        "type": "click",
+        "isTrusted": true,
+        "pointerType": "",
+        "pressure": 0,
+        "width": 1,
+        "height": 1,
+        "tiltX": 0,
+        "pointerId": -1,
+        "buttons": 0,
+        "detail": 0,
+        "sourceCapabilities": null,
+        "webkitForce": null
+      }
+    ]
+  }
+}

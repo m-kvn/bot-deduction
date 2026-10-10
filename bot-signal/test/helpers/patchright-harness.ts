@@ -342,12 +342,17 @@ export async function runBehavioralScenario(
             await sleep(100);
           }
           break;
-        case "linear-typing":
+        case "linear-typing": {
+          let next = performance.now();
           for (const _char of "automated-input") {
             dispatchKeyDown();
-            await sleep(50);
+            next += 50;
+            while (performance.now() < next) {
+              await Promise.resolve();
+            }
           }
           break;
+        }
         case "click-without-mouse":
           dispatchClick(120, 80);
           break;

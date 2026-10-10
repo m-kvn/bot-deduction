@@ -36,6 +36,20 @@ export {
   resolveClientIp,
 } from "./clientIp.js";
 export type { HeaderBag, ResolveClientIpOptions, TrustProxy } from "./clientIp.js";
+export {
+  CRAWLER_RANGES_FILE,
+  createCrawlerRangeVerifier,
+  loadCrawlerRangeData,
+} from "./crawlerRanges.js";
+export type {
+  CrawlerRangeData,
+  CrawlerRangeMatch,
+  CrawlerRangeSource,
+  CrawlerRangeVerifier,
+  CrawlerRangeVerifierOptions,
+} from "./crawlerRanges.js";
+export { createDecoy } from "./decoy.js";
+export type { Decoy, DecoyCredentialLocation, DecoyOptions, DecoyRequestParts } from "./decoy.js";
 export { enrichServerContext } from "./enrich.js";
 export type { EnrichedServerContext } from "./enrich.js";
 export { lookupClientIpGeo } from "./geoip.js";
@@ -62,14 +76,18 @@ export {
   resetIpListCheckerCache,
 } from "./ipLists.js";
 export type { IpListChecker, IpListMatchResult, ParsedIp } from "./ipLists.js";
-export { findBodyCloseIndex, injectHoneytokenIntoResponse } from "./htmlInjection.js";
+export { findBodyCloseIndex, injectHoneytokenIntoResponse, injectMarkupIntoFetchResponse } from "./htmlInjection.js";
 export { createBotProtection, matchesPathPattern, requestPathForms } from "./protect.js";
 export type {
   AttackSignatureProtectionOptions,
   BotPolicyProtectionOptions,
   BotProtection,
   BotProtectionOptions,
+  CrawlerVerificationSource,
+  DecoyProtectionOptions,
   DetectionProtectionOptions,
+  FetchCheckOptions,
+  FetchProtectionResult,
   HandledProtectionDecision,
   HoneytokenProtectionOptions,
   NormalizedProtectionRequest,
@@ -90,8 +108,16 @@ export type {
   TrapRecord,
   TripwireProtectionOptions,
   TrustedHeaderOptions,
+  WebBotAuthProtectionOptions,
 } from "./protect.js";
-export { createRateLimiter, MemoryRateLimitStore, rateLimitHeaders } from "./rateLimit.js";
+export {
+  createRateLimiter,
+  fixedWindowResult,
+  MemoryRateLimitStore,
+  rateLimitHeaders,
+  slidingWindowResult,
+  tokenBucketResult,
+} from "./rateLimit.js";
 export type {
   MemoryRateLimitStoreOptions,
   RateLimitAlgorithm,
@@ -101,6 +127,18 @@ export type {
   RateLimitResult,
   RateLimitStore,
 } from "./rateLimit.js";
+export {
+  createRedisRateLimitStore,
+  createUpstashRateLimitStore,
+  FIXED_WINDOW_SCRIPT,
+  SLIDING_WINDOW_SCRIPT,
+  TOKEN_BUCKET_SCRIPT,
+} from "./rateLimitStores.js";
+export type {
+  RedisRateLimitStoreOptions,
+  RedisScriptRunner,
+  UpstashRateLimitStoreOptions,
+} from "./rateLimitStores.js";
 export {
   aggregateServerSuspicionScore,
   detectServerClient,
@@ -172,4 +210,19 @@ export type {
   TlsFingerprintSource,
   UserAgentFamily,
 } from "./tls.js";
+export {
+  createAgentVerifier,
+  DEFAULT_SIGNED_AGENT_DIRECTORIES,
+  jwkThumbprint,
+} from "./webBotAuth.js";
+export type {
+  AgentJsonWebKey,
+  AgentStatus,
+  AgentVerdict,
+  AgentVerificationRequest,
+  AgentVerifier,
+  AgentVerifierOptions,
+  SignedAgentDirectory,
+  SignedAgentKey,
+} from "./webBotAuth.js";
 export { isBotUserAgent } from "../userAgent.js";

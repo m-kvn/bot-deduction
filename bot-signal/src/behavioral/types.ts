@@ -85,6 +85,8 @@ export interface ButtonSample {
   screenY?: number;
   t: number;
   isTrusted: boolean;
+  pointerType?: string;
+  pressure?: number;
 }
 
 export interface ClickSample {

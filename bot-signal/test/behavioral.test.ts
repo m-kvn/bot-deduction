@@ -17,6 +17,7 @@ import {
   hasSyntheticKeyDwell,
   hasAbsentKeyRollover,
   hasZeroJitterClicks,
+  hasSyntheticPointerPressure,
   hasNoMouseActivity,
   hasSyntheticEvents,
   hasTeleportMouse,
@@ -32,6 +33,7 @@ import type {
   ScrollSample,
   TouchSample,
   KeyReleaseSample,
+  ButtonSample,
 } from "../src/behavioral/types.js";
 
 function createLinearMouseMoves(count = 8): MouseSample[] {
@@ -58,6 +60,13 @@ function createHumanMouseMoves(): MouseSample[] {
     { x: 140, y: 72, t: 233, isTrusted: true },
     { x: 201, y: 88, t: 340, isTrusted: true },
   ];
+}
+
+function createClosedMouseMoves(): MouseSample[] {
+  return [
+    [0, 0], [50, 0], [100, 0], [100, 50], [100, 100],
+    [50, 100], [0, 100], [0, 50], [0, 0],
+  ].map(([x, y], index) => ({ x, y, t: index * 100, isTrusted: true }));
 }
 
 function createLinearScrolls(count = 5): ScrollSample[] {
@@ -136,6 +145,52 @@ describe("behavioral analysis", () => {
   it("detects linear mouse movement", () => {
     expect(hasLinearMouseMovement(createLinearMouseMoves())).toBe(true);
     expect(hasLinearMouseMovement(createHumanMouseMoves())).toBe(false);
+  });
+
+  it.each([0, 0.001])("does not flag a square path ending at y=%s as linear", (endY) => {
+    const moves = createClosedMouseMoves();
+    moves[moves.length - 1].y = endY;
+
+    expect(hasLinearMouseMovement(moves)).toBe(false);
+  });
+
+  it.each([[1, 0], [0, 1], [1, 2]])(
+    "detects collinear out-and-back movement along (%s, %s)",
+    (dx, dy) => {
+      const moves = [0, 50, 100, 150, 200, 150, 100, 50, 0].map((step, index) => ({
+        x: 20 + step * dx,
+        y: 30 + step * dy,
+        t: index * 100,
+        isTrusted: true,
+      }));
+
+      expect(hasLinearMouseMovement(moves)).toBe(true);
+    },
+  );
+
+  it.each([[3, true], [4, false]] as const)(
+    "checks a closed path's %spx deviation against its farthest point",
+    (deviation, expected) => {
+      let t = 0;
+      const points = [[0, 0], [0, deviation], [40, 0], [80, 0], [120, 0], [80, 0], [40, 0], [0, 0]];
+      const moves = points.map(([x, y], index) => {
+        if (index > 0) {
+          t += Math.hypot(x - points[index - 1][0], y - points[index - 1][1]);
+        }
+        return { x, y, t, isTrusted: true };
+      });
+
+      expect(hasLinearMouseMovement(moves)).toBe(expected);
+    },
+  );
+
+  it.each([14, 15])("does not flag closed windows in a %s-point circular trace", (count) => {
+    const moves = Array.from({ length: count }, (_, index) => {
+      const angle = (index % 13) * 2 * Math.PI / 13;
+      return { x: 100 * Math.cos(angle), y: 100 * Math.sin(angle), t: index * 100, isTrusted: true };
+    });
+
+    expect(hasLinearMouseMovement(moves)).toBe(false);
   });
 
   it("requires enough usable mouse speed samples before flagging linear movement", () => {
@@ -879,6 +934,21 @@ describe("touch gesture analysis", () => {
     expect(hasLinearTouchMovement()).toBe(false);
   });
 
+  it("does not flag a closed square swipe as linear", () => {
+    expect(hasLinearTouchMovement(swipe(createClosedMouseMoves()))).toBe(false);
+  });
+
+  it("keeps stationary and collinear out-and-back swipes linear", () => {
+    const points = [0, 50, 100, 150, 200, 150, 100, 50, 0].map((x, index) => ({
+      x,
+      y: 10,
+      t: index * 100,
+    }));
+
+    expect(hasLinearTouchMovement(swipe(points))).toBe(true);
+    expect(hasLinearTouchMovement(swipe(points.map((point) => ({ ...point, x: 0 }))))).toBe(true);
+  });
+
   it("flags a contact point that jumps mid-gesture", () => {
     expect(
       hasTeleportTouch(
@@ -1165,6 +1235,16 @@ describe("generated pointer paths", () => {
     expect(hasGeneratedPointerPath(session(handReach))).toBe(false);
   });
 
+  it("skips a reach whose every sample sits at one of its ends", () => {
+    const reach = Array.from({ length: 12 }, (_, index) => ({
+      x: index === 11 ? 100 : 0,
+      y: index === 0 || index === 11 ? 0 : index % 2 === 0 ? 5 : -5,
+      t: index * 10,
+      isTrusted: true,
+    }));
+    expect(hasGeneratedPointerPath([...reach, ...reach.map((move) => ({ ...move, t: move.t + 1_000 }))])).toBe(false);
+  });
+
   it("needs several reaches to agree", () => {
     expect(hasGeneratedPointerPath(bezierReach([200, 200], [800, 620], 0, 60))).toBe(false);
   });
@@ -1351,5 +1431,106 @@ describe("key dwell and rollover", () => {
   it("needs a long enough run before absent overlap means anything", () => {
     const brief = session({ n: 10, dwellMs: 60, flightMs: 90 });
     expect(hasAbsentKeyRollover(brief.keyPresses, brief.keyReleases)).toBe(false);
+  });
+});
+
+describe("synthetic pointer pressure", () => {
+  const press = (pressure: number | undefined, extra: Partial<ButtonSample> = {}): ButtonSample => ({
+    kind: "down",
+    x: 10,
+    y: 10,
+    t: 0,
+    isTrusted: true,
+    pointerType: "mouse",
+    pressure,
+    ...extra,
+  });
+
+  it("flags mouse presses that report no pressure, as Puppeteer, Selenium and raw CDP do", () => {
+    expect(hasSyntheticPointerPressure([press(0)])).toBe(true);
+    expect(hasSyntheticPointerPressure([press(0), press(0.5)])).toBe(true);
+    expect(hasSyntheticPointerPressure([press(0), press(0.5), press(0.5)])).toBe(false);
+  });
+
+  it("ignores pressure a real device reports and anything that is not a trusted mouse press", () => {
+    expect(hasSyntheticPointerPressure([press(0.5), press(0.5)])).toBe(false);
+    expect(hasSyntheticPointerPressure([press(0, { pointerType: "pen" })])).toBe(false);
+    expect(hasSyntheticPointerPressure([press(0, { pointerType: "touch" })])).toBe(false);
+    expect(hasSyntheticPointerPressure([press(0, { isTrusted: false })])).toBe(false);
+    expect(hasSyntheticPointerPressure([press(0, { kind: "up" })])).toBe(false);
+    expect(hasSyntheticPointerPressure([press(undefined)])).toBe(false);
+    expect(hasSyntheticPointerPressure([])).toBe(false);
+    expect(hasSyntheticPointerPressure(undefined)).toBe(false);
+  });
+
+  it("weighs as supporting evidence only", () => {
+    const signal = buildBehavioralSignals({
+      mouseMoves: [],
+      scrolls: [],
+      keyPresses: [],
+      clicks: [],
+      buttons: [press(0)],
+      observationMs: 1_000,
+    }).find(({ id }) => id === "synthetic-pointer-pressure");
+    expect(signal).toMatchObject({ triggered: true, weight: 0.45, confidence: "medium" });
+  });
+
+  it("pairs each primary pointerdown with its mousedown in the detector", () => {
+    const context = createCapturingTarget();
+    Object.assign(context, { navigator: { platform: "Win32", userAgent: "Mozilla/5.0 Chrome/140.0.0.0" } });
+    const detector = createBehavioralClientDetector({ context });
+    detector.start();
+
+    context.emit("pointerdown", { button: 0, pointerType: "mouse", pressure: 0, isTrusted: true });
+    context.emit("mousedown", { button: 0, clientX: 5, clientY: 5, isTrusted: true });
+    context.emit("mouseup", { button: 0, clientX: 5, clientY: 5, isTrusted: true });
+    context.emit("pointerdown", { button: 2, pointerType: "mouse", pressure: 0.5, isTrusted: true });
+    context.emit("mousedown", { button: 0, clientX: 6, clientY: 6, isTrusted: true });
+
+    const [down, up, unpaired] = detector.getSamples().buttons;
+    expect(down).toMatchObject({ kind: "down", pointerType: "mouse", pressure: 0 });
+    expect(up.pressure).toBeUndefined();
+    expect(unpaired.pressure).toBeUndefined();
+    expect(
+      detector.getResult().signals.find(({ id }) => id === "synthetic-pointer-pressure")?.triggered,
+    ).toBe(true);
+    detector.stop();
+    expect(context.count("pointerdown")).toBe(0);
+  });
+
+  it("records key releases and ignores buttons other than the primary one", () => {
+    const context = createCapturingTarget();
+    Object.assign(context, { navigator: { platform: "Win32", userAgent: "Mozilla/5.0" } });
+    const detector = createBehavioralClientDetector({ context });
+    detector.start();
+    context.emit("keydown", { isTrusted: true, code: "ShiftLeft", keyCode: 16, isComposing: false });
+    context.emit("keyup", { isTrusted: true, code: "ShiftLeft", isComposing: false });
+    context.emit("keydown", { isTrusted: true, key: "a", code: "KeyA", keyCode: 65, isComposing: false });
+    context.emit("pointerdown", { button: 2, pointerType: "mouse", pressure: 0.5, isTrusted: true });
+    context.emit("mousedown", { button: 2, clientX: 4, clientY: 4, isTrusted: true });
+    context.emit("mouseup", { button: 2, clientX: 4, clientY: 4, isTrusted: true });
+    const samples = detector.getSamples();
+    expect(samples.keyPresses).toEqual([
+      expect.objectContaining({ code: "ShiftLeft", printable: false }),
+      expect.objectContaining({ code: "KeyA", printable: true }),
+    ]);
+    expect(samples.keyReleases).toEqual([
+      expect.objectContaining({ code: "ShiftLeft", isTrusted: true, composing: false }),
+    ]);
+    expect(samples.buttons).toEqual([]);
+    detector.stop();
+  });
+
+  it("does not record pressure on Apple platforms, where it is unmeasured", () => {
+    for (const platform of ["MacIntel", "iPhone"]) {
+      const context = createCapturingTarget();
+      Object.assign(context, { navigator: { platform, userAgent: "Mozilla/5.0" } });
+      const detector = createBehavioralClientDetector({ context });
+      detector.start();
+      context.emit("pointerdown", { button: 0, pointerType: "mouse", pressure: 0, isTrusted: true });
+      context.emit("mousedown", { button: 0, clientX: 5, clientY: 5, isTrusted: true });
+      expect(detector.getSamples().buttons[0].pressure).toBeUndefined();
+      detector.stop();
+    }
   });
 });

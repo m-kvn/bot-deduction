@@ -888,6 +888,7 @@ try {
         "client:missing-telemetry-stream",
         "client:honeypot-field-filled",
         "client:honeytoken-tripped",
+        "client:decoy-api-tripped",
       ].filter((id) => plumbingSignals.has(id));
       add({
         category: "False-positive guard",
@@ -898,6 +899,16 @@ try {
         passed: wrongly.length === 0,
         evidence: `Signals seen: ${[...plumbingSignals].join(", ") || "none"}`,
         severity: "Critical",
+      });
+      add({
+        category: "False-positive guard",
+        name: "A mouse press carrying real button pressure is not read as synthetic",
+        vector: "Pointer presses at pressure 0.5, what the Pointer Events spec assigns a pressed mouse button",
+        expected: "synthetic-pointer-pressure stays quiet",
+        actual: plumbingSignals.has("behavioral:synthetic-pointer-pressure") ? "fired" : "quiet",
+        passed: !plumbingSignals.has("behavioral:synthetic-pointer-pressure"),
+        evidence: `Signals seen: ${[...plumbingSignals].join(", ") || "none"}`,
+        severity: "High",
       });
       await page.locator("#result h2").waitFor({ state: "visible" });
       await page.screenshot({ path: fileURLToPath(new URL("human_control.png", reportDir)), fullPage: true });
@@ -999,6 +1010,69 @@ try {
   }
 
   {
+    const { context, page } = await newPage(headed);
+    try {
+      const cdp = await context.newCDPSession(page);
+      let cursor = [180, 160];
+      const glide = async (x, y) => {
+        const [fromX, fromY] = cursor;
+        for (let step = 1; step <= 14; step += 1) {
+          await cdp.send("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: fromX + ((x - fromX) * step) / 14 + Math.sin(step * 1.7) * 3,
+            y: fromY + ((y - fromY) * step) / 14 + Math.cos(step * 1.3) * 3,
+            button: "none",
+            buttons: 0,
+          });
+          await page.waitForTimeout(12 + (step % 4) * 6);
+        }
+        cursor = [x, y];
+      };
+      const press = async (x, y) => {
+        await glide(x, y);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+        await page.waitForTimeout(90);
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: x + 1, y: y + 1, button: "left", buttons: 0, clickCount: 1 });
+      };
+      const keyFor = (char) => {
+        if (/[a-z]/i.test(char)) return { code: `Key${char.toUpperCase()}`, keyCode: char.toUpperCase().charCodeAt(0) };
+        if (char === "@") return { code: "Digit2", keyCode: 50 };
+        if (char === ".") return { code: "Period", keyCode: 190 };
+        return { code: "Space", keyCode: 32 };
+      };
+      const typeInto = async (selector, text) => {
+        const box = await page.locator(selector).boundingBox();
+        await press(box.x + box.width / 3, box.y + box.height / 2);
+        for (const [index, char] of [...text].entries()) {
+          const { code, keyCode } = keyFor(char);
+          const base = { key: char, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode };
+          await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: char });
+          await page.waitForTimeout(70 + ((index * 37) % 60));
+          await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+          await page.waitForTimeout(150 + ((index * 53) % 140));
+        }
+      };
+      await typeInto('input[name="name"]', "Raw Protocol");
+      await typeInto('input[name="email"]', "raw.protocol@example.test");
+      const button = await page.locator('button[type="submit"]').boundingBox();
+      const response = await actionSubmission(page, () => press(button.x + button.width / 2, button.y + button.height / 2));
+      const fired = (response.data.signals ?? []).map((signal) => `${signal.layer}:${signal.id}`);
+      add({
+        category: "Signal coverage",
+        name: "Raw CDP mouse input reports a weightless button press",
+        vector: "Input.dispatchMouseEvent without force: trusted pointerdown with pressure 0 (C7/C8 input path)",
+        expected: "behavioral:synthetic-pointer-pressure fires",
+        actual: `${String(response.data.verdict).toUpperCase()}; pressure signal ${fired.includes("behavioral:synthetic-pointer-pressure") ? "fired" : "silent"}`,
+        passed: fired.includes("behavioral:synthetic-pointer-pressure"),
+        evidence: `HTTP ${response.status}; signals: ${fired.join(", ") || "none"}`,
+        severity: "Medium",
+      });
+    } finally {
+      await context.close();
+    }
+  }
+
+  {
     // How nearly every real-world form bot drives a page: set the value in one
     // call. Playwright/patchright fill(), CDP Input.insertText and element.value
     // assignment all deliver a whole field in a single trusted insertText with no
@@ -1087,6 +1161,44 @@ try {
           fired.includes("client:honeytoken-tripped") &&
           events.some((event) => event.rule === "honeytoken" && event.blocked),
         evidence: `Crawled: ${crawled.join("; ")}; signals: ${fired.join(", ") || "none"}`,
+        severity: "High",
+      });
+    } finally {
+      await context.close();
+    }
+  }
+
+  {
+    const { context, page } = await newPage(headed);
+    try {
+      const config = await page.evaluate(() => {
+        const element = document.getElementById("api-config");
+        return element ? JSON.parse(element.textContent ?? "{}") : null;
+      });
+      const probe = config ? await context.request.get(`${base}${config.apiBase}/users`) : null;
+      await page.locator('input[name="name"]').click();
+      await page.keyboard.type("Endpoint Miner", { delay: 82 });
+      await page.locator('input[name="email"]').click();
+      await page.keyboard.type("endpoint.miner@example.test", { delay: 76 });
+      const button = await page.locator('button[type="submit"]').boundingBox();
+      await page.mouse.move(button.x + button.width / 2 - 50, button.y - 25, { steps: 6 });
+      const response = await actionSubmission(page, () =>
+        page.mouse.click(button.x + button.width / 2, button.y + button.height / 2),
+      );
+      const fired = (response.data.signals ?? []).map((signal) => `${signal.layer}:${signal.id}`);
+      const events = (await (await fetch(`${base}/api/protection`)).json()).events;
+      add({
+        category: "Honeypot",
+        name: "API-mining bot calls the decoy endpoint from the page config",
+        vector: "Reads the inline JSON config a page script would use, calls the advertised API base, then fills the form",
+        expected: "AGENT with client:decoy-api-tripped, decoy request refused and logged",
+        actual: `${String(response.data.verdict).toUpperCase()}; decoy ${fired.includes("client:decoy-api-tripped") ? "fired" : "silent"}; probe HTTP ${probe?.status() ?? "not sent"}`,
+        passed:
+          response.data.verdict === "agent" &&
+          fired.includes("client:decoy-api-tripped") &&
+          probe?.status() === 404 &&
+          events.some((event) => event.rule === "decoy" && event.blocked),
+        evidence: `Config: ${JSON.stringify(config)}; signals: ${fired.join(", ") || "none"}`,
         severity: "High",
       });
     } finally {

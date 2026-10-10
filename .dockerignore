@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+**/node_modules
+**/coverage
+**/coverage-tmp
+**/dist
+**/*.log
+**/submissions.db
+**/submissions.db-*
+Test_Report
+bot-signal/test
+bot-signal/docs
+bot-signal/.github
+bot-signal/.pages
