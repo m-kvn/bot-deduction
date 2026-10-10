@@ -1,5 +1,23 @@
 import type { ConfidenceLevel } from "./types.js";
 import { getScriptingUserAgentKind } from "../userAgent.js";
+import {
+  computeTlsFingerprints,
+  isGreaseValue,
+  parseJa4,
+} from "./tlsClientHello.js";
+import type { TlsClientHello } from "./tlsClientHello.js";
+
+export interface TlsFingerprintSource {
+  userAgent?: string;
+  tlsFingerprint?: string;
+  tlsFingerprintType?: "ja3" | "ja4";
+  tlsClientHello?: TlsClientHello;
+}
+
+export interface TlsFingerprintCandidate {
+  fingerprint: string;
+  type: "ja3" | "ja4";
+}
 
 export interface TlsFingerprintEntry {
   id: string;
@@ -219,6 +237,85 @@ export function isTlsUserAgentMismatch(
 
   const compatibleFamilies = UA_FAMILY_COMPATIBILITY[uaFamily];
   return !entry.families.some((family) => compatibleFamilies.includes(family));
+}
+
+export function getTlsFingerprintCandidates(
+  source: TlsFingerprintSource,
+): TlsFingerprintCandidate[] {
+  const candidates: TlsFingerprintCandidate[] = [];
+  if (source.tlsFingerprint) {
+    candidates.push({
+      fingerprint: source.tlsFingerprint,
+      type: source.tlsFingerprintType ?? "ja3",
+    });
+  }
+  if (source.tlsClientHello) {
+    const { ja3Hash, ja4 } = computeTlsFingerprints(source.tlsClientHello);
+    candidates.push({ fingerprint: ja4, type: "ja4" }, { fingerprint: ja3Hash, type: "ja3" });
+  }
+  return candidates;
+}
+
+const TLS_PROFILE_FAMILIES: ReadonlySet<UserAgentFamily> = new Set<UserAgentFamily>([
+  "chrome",
+  "edge",
+  "firefox",
+  "safari",
+]);
+const LEGACY_JA4_VERSIONS: ReadonlySet<string> = new Set(["12", "11", "10", "s3", "s2", "00"]);
+const BROWSER_ALPN: ReadonlySet<string> = new Set(["h2", "h3"]);
+const RAW_JA3_PATTERN = /^\d+,[\d-]*,[\d-]*,[\d-]*,[\d-]*$/;
+
+export function getTlsBrowserProfileMismatches(source: TlsFingerprintSource): string[] {
+  const family = getUserAgentFamily(source.userAgent);
+  if (!TLS_PROFILE_FAMILIES.has(family)) {
+    return [];
+  }
+
+  const reasons = new Set<string>();
+  const type = source.tlsFingerprintType ?? "ja3";
+  const ja4Values = [
+    ...(source.tlsClientHello ? [computeTlsFingerprints(source.tlsClientHello).ja4] : []),
+    ...(source.tlsFingerprint && type === "ja4" ? [source.tlsFingerprint] : []),
+  ];
+
+  for (const value of ja4Values) {
+    const parts = parseJa4(value);
+    if (!parts) {
+      continue;
+    }
+    if (LEGACY_JA4_VERSIONS.has(parts.version)) {
+      reasons.add("offered no TLS 1.3");
+    }
+    if (parts.alpn === "00") {
+      reasons.add("sent no ALPN");
+    } else if (!BROWSER_ALPN.has(parts.alpn.toLowerCase())) {
+      reasons.add(`offered ALPN ${parts.alpn} instead of HTTP/2`);
+    }
+  }
+
+  const raw = source.tlsFingerprint?.trim();
+  if (raw && type === "ja3" && RAW_JA3_PATTERN.test(raw)) {
+    const extensions = raw.split(",")[2].split("-").filter(Boolean).map(Number);
+    if (!extensions.includes(43)) {
+      reasons.add("offered no TLS 1.3");
+    }
+    if (!extensions.includes(16)) {
+      reasons.add("sent no ALPN");
+    }
+  }
+
+  const hello = source.tlsClientHello;
+  if (
+    hello &&
+    (family === "chrome" || family === "edge") &&
+    !hello.cipherSuites.some(isGreaseValue) &&
+    !hello.extensions.some(isGreaseValue)
+  ) {
+    reasons.add("Chromium User-Agent sent no GREASE values");
+  }
+
+  return [...reasons];
 }
 
 /** Browser-like UA arriving without a TLS fingerprint (only when `requireTlsFingerprint`). */

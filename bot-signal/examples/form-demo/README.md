@@ -7,7 +7,8 @@ submission with its verdict.
 |-------|------|-----------------|
 | Instant | Browser, on page load | Headless Chrome, Playwright/Puppeteer/Selenium artifacts, spoofed fingerprints |
 | Behavioral | Browser, while the form is filled | Synthetic events, linear mouse/typing, no mouse activity, teleporting cursor |
-| Server | Node, on POST | Scripting/bot User-Agent, datacenter + abuse-listed IP, TLS (JA3) mismatch, timezone/header mismatch |
+| Server | Node, on POST | Scripting/bot User-Agent, datacenter + abuse-listed IP, TLS (JA3/JA4) mismatch, timezone/header mismatch |
+| Request protection | Node, every request | Scanner bait paths, the hidden honeytoken link, the hidden `hp_check` field, attack payloads, AI training crawlers, request floods |
 
 The three scores combine into one verdict (`1 - Π(1 - scoreᵢ)`); a submission is an **agent** if any
 layer rejects it, or if the form was posted without running the page JavaScript.
@@ -55,6 +56,17 @@ node examples/form-demo/server.mjs
    node examples/form-demo/bots/browser-bot.mjs
    ```
    → **AGENT** — instant automation artifacts + robotic input.
+4. Scanner and scraper traps:
+   ```bash
+   curl -i http://localhost:8787/.env                                 # 404, logged as tripwire
+   curl -i "http://localhost:8787/?q=1%27%20OR%201=1--"               # 403, attack-signatures
+   curl -i -A "GPTBot/1.1" http://localhost:8787/                    # 403, bot policy
+   curl -i -A "BotSignal-Test/1.0" http://localhost:8787/            # 403, installation probe
+   curl -s http://localhost:8787/robots.txt                           # honeytoken + policy, published
+   ```
+   Each one appears under **Request protection** on the dashboard. The honeytoken path is in the
+   page source as a hidden link; request it with the page cookie and that page session's next
+   submission is rejected on `client:honeytoken-tripped`.
 
 ## Visitors abroad, travellers and VPNs
 
@@ -90,8 +102,13 @@ Spawns throwaway servers (in-memory DB) and exercises the detection paths: scrip
 bot User-Agents, header-vs-JS UA, Client Hints version/platform/mobile, Fetch Metadata, Accept-Language
 vs `navigator.languages`, timezone and country vs GeoIP, datacenter / AbuseIPDB / iCloud-relay IPs,
 spoofed crawler identity, suspicious JA3 and JA4, missing TLS fingerprint, client-layer validation,
-one-time challenges, trusted interaction history, and the instant + behavioral results forwarded from
-the page. Prints PASS/FAIL per case.
+one-time challenges, trusted interaction history, the hidden honeypot field, a page session that
+followed the honeytoken, self-declared registry agents, JA4 handshake shape, and the instant +
+behavioral results forwarded from the page. Prints PASS/FAIL per case, then a second table of
+request-protection checks: the injected honeytoken and honeypot field, `robots.txt`, the tripwire log,
+attack signatures, the bot policy, the installation probe, the verified-crawler exemption, an
+unverified Googlebot claim, cross-site attribution, an absolute-form target against the submit limit, the submit
+rate limit, and native JA4 over HTTPS using the test certificate in `test/fixtures/`.
 
 TLS options are off by default because plain Node sees no TLS fingerprint. Enable them with
 `SUSPICIOUS_TLS` (comma-separated hashes), `SUSPICIOUS_TLS_ENTRIES` (JSON `TlsFingerprintEntry[]` —
@@ -109,7 +126,10 @@ crawler-verification headers before writing its own trusted values. The safe def
 - Backend: `import { detectServerClientAsync } from "bot-signal/server"` and pass the request headers —
   see `handleSubmit` in `server.mjs`.
 - Behind a proxy, forward the real client IP (`X-Forwarded-For`) and the JA3 hash (`X-JA3-Hash`) from
-  your TLS terminator — without a JA3 hash the TLS checks stay inert.
+  your TLS terminator — or terminate TLS in Node (`TLS_CERT_FILE`/`TLS_KEY_FILE`) and the app computes
+  JA3/JA4 from the ClientHello itself.
+- Request protection: `createBotProtection()` from `bot-signal/server`, run before routing — see
+  `handleRequest` in `server.mjs` (or `app.use(protection.middleware())` in Express).
 
 ## Storage
 

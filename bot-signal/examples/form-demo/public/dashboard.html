@@ -40,6 +40,28 @@
           </tbody>
         </table>
       </section>
+
+      <section class="card">
+        <h2>Request protection <span class="muted small" id="protection-mode"></span></h2>
+        <p class="muted small">
+          Tripwires, the hidden honeytoken link, attack signatures, the bot policy and rate limits —
+          evaluated on every request before it reaches the form.
+        </p>
+        <table id="protection-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Rule</th>
+              <th>Request</th>
+              <th>IP / UA</th>
+              <th>Outcome</th>
+            </tr>
+          </thead>
+          <tbody id="protection-rows">
+            <tr><td colspan="5" class="muted">Nothing tripped yet.</td></tr>
+          </tbody>
+        </table>
+      </section>
     </main>
 
     <script src="./dashboard.js"></script>

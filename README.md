@@ -4,8 +4,9 @@ A self-hosted contact form that decides, per submission, whether it was filled i
 by an **agent / bot** — with no auth, no CAPTCHA, no third-party API and no outbound network calls at
 request time. Every signal is computed locally from the browser and from the HTTP request itself.
 
-Latest verified run: **86/86 harness tests, 400 unit tests, 30 crosscheck cases**, and **66/66
-agent-driven submissions in the harness matrix are classified as AGENT** — including a real PowerShell `SendInput` session driving a live
+Latest verified run: **92/92 harness tests, 564 unit tests, 46 crosscheck checks** (34 server-detection
+cases + 12 request-protection checks), and **75/75 agent-driven submissions in the harness matrix are
+classified as AGENT** — including a real PowerShell `SendInput` session driving a live
 Chrome window. That is a rate over the attacks in the matrix, not a claim of completeness: an
 independent red team passed four methods it does not contain (see **Known-open vectors** below).
 Reports live in `Test_Report/`.
@@ -18,18 +19,18 @@ Reports live in `Test_Report/`.
 .
 ├─ .env.example                     # every runtime variable, documented
 ├─ bot-signal/                      # the detection library + the demo app
-│  ├─ src/                          # instant, behavioral and server detectors (TypeScript)
+│  ├─ src/                          # instant, behavioral and server detectors, request protection (TypeScript)
 │  ├─ data/                         # offline IP lists (datacenter, AbuseIPDB, iCloud Relay)
-│  ├─ test/                         # 400 unit tests (vitest)
+│  ├─ test/                         # unit tests (vitest)
 │  └─ examples/form-demo/
 │     ├─ server.mjs                 # the app: static pages + /api/challenge + /api/submit
 │     ├─ db.mjs                     # SQLite persistence (node:sqlite, no native deps)
-│     ├─ crosscheck.mjs             # 30 server-side detection cases
+│     ├─ crosscheck.mjs             # server-side detection cases + request-protection checks
 │     ├─ bots/                      # scripted + browser bot simulators
 │     └─ public/                    # index.html (form), dashboard.html, app.js, styles.css
 └─ Test_Report/
-   ├─ run_tests.mjs                 # 86-case end-to-end harness (Patchright + direct HTTP)
-   ├─ probe/                        # OS input-injection measurement + replay tooling
+   ├─ run_tests.mjs                 # end-to-end harness (Patchright + direct HTTP)
+   ├─ probe/                        # OS input-injection and TLS-handshake measurement tooling
    ├─ generate_agent_detection_report.mjs
    ├─ results.json                  # raw results of the last run
    ├─ agent_detection_test_report.html / .pdf
@@ -89,6 +90,13 @@ optional — the defaults below are what the app uses when nothing is set.
 | `SUSPICIOUS_TLS` | empty | Comma-separated JA3/JA4 hashes to treat as known-bad |
 | `SUSPICIOUS_TLS_ENTRIES` | empty | Same, as JSON, so each entry can carry a label and score |
 | `TZ_TOLERANCE_MINUTES` | `180` | Allowed drift between the browser clock and the GeoIP timezone before it is noted |
+| `TRUST_PROXY_HOPS` | `1` | With `CLIENT_IP_HEADER=x-forwarded-for`, how many proxies you run in front of the app; the client is read that many entries from the **right** |
+| `PROTECTION_MODE` | `enforce` | `monitor` records tripwire, honeytoken, attack-signature, bot-policy and rate-limit hits on the dashboard without refusing them |
+| `RATE_LIMIT_MAX` / `SUBMIT_RATE_LIMIT_MAX` | `600` / `30` | Hard per-IP limits on `/api/*` and on `POST /api/submit` per `RATE_LIMIT_WINDOW_MS` (60000), answered with 429 + `Retry-After`; `0` disables |
+| `TRAP_LOCKOUT_MS` | `0` | Refuse every request from an address for this long after it hits a trap; `0` sends its later submissions to review instead |
+| `BOT_POLICY_DENY` | `training_crawler` | Registry categories, agent names or `ai` to refuse and to publish in `/robots.txt`; empty disables |
+| `HONEYTOKEN_SECRET` | random per process | Secret the hidden honeytoken path is derived from — set the same value on every replica |
+| `TLS_CERT_FILE` / `TLS_KEY_FILE` | unset | Serve HTTPS directly and compute JA3/JA4 from each connection ClientHello, no edge needed |
 | `DEMO_URL` / `HEADFUL` / `BOT_UA` | — | Only used by the bot simulators in `examples/form-demo/bots/` |
 
 Node does not read `.env` files on its own. Either load it explicitly
@@ -97,7 +105,10 @@ variables — both options are shown below.
 
 > **Security note on `TRUST_EDGE_HEADERS`:** leave it unset when the app is exposed directly to the
 > internet. With it on, any caller can forge their own IP and TLS fingerprint simply by sending the
-> headers themselves, which silently weakens the server layer.
+> headers themselves, which silently weakens the server layer. Even behind a proxy the client IP is
+> taken `TRUST_PROXY_HOPS` entries from the right of `X-Forwarded-For`, never the leftmost entry —
+> nginx's `$proxy_add_x_forwarded_for` appends to whatever the client sent, so the leftmost value is
+> the caller's choice.
 
 ---
 
@@ -435,19 +446,75 @@ Verified against the scan-code injection that defeats detection: first run `huma
 second run with the same content `human` / **`review`**. The verdict stays honest; the submission
 stops being silently accepted.
 
+### Request protection — traps, payloads, declared bots and floods
+
+Everything above judges a submission. Some requests convict themselves before any form exists:
+nobody types `/.env`, nobody can see a link that is `hidden` and `aria-hidden`, and nobody sends
+`' OR 1=1--` by accident. Every request first passes through `createBotProtection()` from the
+library (ported from [WebDecoy/node](https://github.com/WebDecoy/node) and extended):
+
+| Rule | What it refuses | Response |
+|---|---|---|
+| Hidden honeytoken link | Injected into every HTML page at a path derived from `HONEYTOKEN_SECRET`, disallowed in `/robots.txt`. Only a link harvester requests it | 404 |
+| Tripwire | Scanner bait — `/.env*`, `/.git/`, `/.aws/`, `/wp-config.php`, SQL dumps — after percent-decoding and `..` resolution | 404 |
+| Attack signatures | Unambiguous SQLi, XSS, traversal, shell and Log4Shell payloads in the path or query | 403 |
+| Bot policy | Agents in `BOT_POLICY_DENY` (AI training crawlers by default), published in `/robots.txt` from the same list | 403 |
+| Rate limits | More than `RATE_LIMIT_MAX` API calls or `SUBMIT_RATE_LIMIT_MAX` submissions per minute from one address | 429 + `Retry-After` |
+| Installation probe | `curl -A "BotSignal-Test/1.0"` gets a deterministic 403, proving enforcement is live | 403 |
+
+Two traps also feed the verdict as **hard evidence**:
+
+| Signal | Fires when |
+|---|---|
+| `client:honeypot-field-filled` | The off-screen, `aria-hidden`, `tabindex="-1"` field `hp_check` arrives non-empty. Its neutral name and "Leave this field empty" label are chosen so no browser autofill heuristic recognises it |
+| `client:honeytoken-tripped` | The submitting page session requested the hidden honeytoken path |
+
+An address that tripped a trap from a *different* page session is sent to review (`risk`), not
+refused — one infected machine behind an office NAT should not lock out its colleagues. Set
+`TRAP_LOCKOUT_MS` to refuse those addresses outright. A trap is only attributed to a request the
+client made itself: cross-site requests, embedded images and scripts, and prefetches are answered
+but never recorded, so another site cannot make your visitors trip a trap by embedding its URL. A
+claimed Googlebot gets no exemption — real search crawlers obey the `robots.txt` Disallow and never
+reach the trap — only a crawler your edge verifies (`X-Crawler-Verification: verified`) does.
+
+The dashboard lists every refused or dry-run request with its rule and reason, and
+`PROTECTION_MODE=monitor` turns all of it into observation only. Like `/api/submissions`, the
+dashboard's `/api/protection` and `/api/reset` endpoints are unauthenticated demo endpoints that
+expose visitor IPs and User-Agents — put them behind your proxy's authentication before exposing the
+demo publicly. `/api/reset` clears the submission and event logs but deliberately not the trap
+records, so a client cannot wipe its own history.
+
+**Caveat:** a browser extension that fetches every link on a page (link checkers, some SEO tools)
+will request the honeytoken from inside a person's session. That is automation, but not the
+person's; treat a `honeytoken-tripped` rejection that a user disputes accordingly.
+
+### JA3 and JA4 without an edge
+
+With `TLS_CERT_FILE` and `TLS_KEY_FILE` set the app serves HTTPS itself, reads each connection's
+ClientHello, and computes JA3 and JA4 locally — no TLS-terminating proxy and no `x-ja4` header to
+trust. On top of fingerprint lists, `server:tls-browser-profile-mismatch` checks the handshake's
+shape against the claimed browser: no TLS 1.3, no ALPN, HTTP/1.1-only ALPN, or a Chromium
+User-Agent without GREASE. `Test_Report/probe/tls_profile_probe.mjs` measured 18 real handshakes
+from Chrome, Edge and Firefox (two origins, three runs each) with **zero** flagged against their own
+User-Agent, and **6 of 6** scripted clients (Node `https`, `fetch` and `http2`, Windows `curl.exe`,
+PowerShell and Python `urllib`) flagged when claiming Chrome. It weighs 0.45 — corroborating only —
+because a TLS-inspecting corporate proxy, or a Firefox user with a User-Agent switcher, produces it
+honestly.
+
 ---
 
 ## Tests and reports
 
 ```bash
 cd bot-signal
-npm test                                   # 400 unit tests
-node examples/form-demo/crosscheck.mjs     # 30 server-detection cases
+npm test                                   # 564 unit tests
+node examples/form-demo/crosscheck.mjs     # 34 server-detection cases + 12 request-protection checks
 
 npx patchright install chromium            # once, for the browser harness
 cd ../Test_Report
-node run_tests.mjs                         # 86 end-to-end cases -> results.json
+node run_tests.mjs                         # 92 end-to-end cases -> results.json
 node generate_agent_detection_report.mjs   # -> HTML + PDF report
+node probe/tls_profile_probe.mjs           # real-browser ClientHello measurement (headless)
 ```
 
 `run_tests.mjs` and `generate_agent_detection_report.mjs` point at a Windows Chrome install
@@ -465,3 +532,14 @@ unknown — worth measuring before this gates anything that matters.
 `bot-signal/` started from [okasi/bot-signal](https://github.com/okasi/bot-signal) (MIT) and has been
 modified here: a repeated-typing-cadence behavioral signal, request-provenance checks, and the
 cookie-bound page-load session layer in `examples/form-demo/server.mjs`.
+
+The request-protection layer adapts [WebDecoy/node](https://github.com/WebDecoy/node) (MIT, notice in
+`bot-signal/LICENSE`): its tripwire paths and path canonicalisation, honeytoken link and injection,
+186-agent bot registry and bot policy, attack signatures, rate-limit windows and right-to-left proxy
+trust. Added here on top: a synchronous HMAC honeytoken whose base path is itself derived (so no
+universal `/__wd/` prefix to skip), robots.txt disallow, a verified-crawler exemption and a
+cross-site attribution guard for the traps, streaming HTML injection that never unwraps later
+middleware, path matching on every reading of the request target,
+an in-app-browser guard on the registry, form honeypot fields, `UNION ALL` and `+`-encoded query
+matching, bounded rate-limit memory, and JA3/JA4 computed from the ClientHello instead of sent to a
+hosted service.

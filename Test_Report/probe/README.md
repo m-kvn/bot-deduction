@@ -1,6 +1,7 @@
-# OS input-injection probe
+# Measurement probes
 
-Two scripts, both of which take over the mouse and keyboard while they run.
+The two OS input-injection scripts take over the mouse and keyboard while they run; the TLS probe
+at the end does not.
 
 ## `probe.mjs` — what does Chromium report for injected keystrokes?
 
@@ -38,3 +39,35 @@ Expected: `HTTP 403`, `verdict: agent`, on `behavioral:injected-key-input` and
 > Point `TARGET` at a port you started yourself. A forwarder bound to `127.0.0.1` (Cursor and VS Code
 > both do this) takes precedence over a server bound to `0.0.0.0` on the same port, so `localhost`
 > can quietly reach a different, older process than the one you just restarted.
+
+## `tls_profile_probe.mjs` — what do real browsers put in a ClientHello?
+
+Does **not** take over input: browsers run headless with throwaway profiles. A raw TCP listener
+reads each ClientHello, parses it with the library, and closes the connection, so no certificate is
+needed. Each installed browser connects to a domain origin (`localhost`, SNI sent) and an IP origin
+(`127.0.0.1`, no SNI), three times each; common scripted clients connect once. Results are written
+to `tls_profile_results.json`.
+
+```bash
+cd ../../bot-signal && npm run build && cd ../Test_Report/probe
+node tls_profile_probe.mjs           # TLS_PROBE_REPETITIONS=3 by default
+```
+
+Result on Windows 11 (Chrome, Edge and Firefox current stable):
+
+| Client | JA4 (domain / IP origin) | ALPN | GREASE |
+|---|---|---|---|
+| Google Chrome | `t13d1517h2` / `t13i1516h2` | h2, http/1.1 | yes |
+| Microsoft Edge | `t13d1516h2` / `t13i1515h2` | h2, http/1.1 | yes |
+| Mozilla Firefox | `t13d1517h2` / `t13i1516h2` | h2, http/1.1 | no |
+| Node `https.get` | `t13d521100` | none | no |
+| Node `fetch` (undici) | `t13d5212h1` | http/1.1 | no |
+| Node `http2.connect` | `t13d5212h2` | h2 | no |
+| `curl.exe` (Schannel) | `t13d2012h1` | http/1.1 | no |
+| PowerShell `Invoke-WebRequest` | `t13d201100` | none | no |
+| Python `urllib` | `t13d181100` | none | no |
+
+All 18 browser handshakes pass `tls-browser-profile-mismatch` against their own User-Agent; all 6
+scripted clients fail it when they claim Chrome. Node `http2.connect` offers TLS 1.3 and `h2` like
+a browser and is caught only by the missing GREASE — which is also why a real Firefox spoofing a
+Chrome User-Agent is flagged, and why the signal stays at 0.45.

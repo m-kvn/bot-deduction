@@ -5,13 +5,54 @@ export {
   isClientLanguageMismatch,
   isClientPlatformMismatch,
   isClientUserAgentMismatch,
+  isDeclaredBotAgent,
   isMissingBrowserHeaders,
   isScriptingUserAgent,
 } from "./analysis.js";
+export { ATTACK_SIGNATURE_IDS, findAttackSignature } from "./attackSignatures.js";
+export type {
+  AttackSignatureInput,
+  AttackSignatureLocation,
+  AttackSignatureMatch,
+  AttackSignatureOptions,
+} from "./attackSignatures.js";
+export { BOT_CATEGORIES, BOT_REGISTRY } from "./botRegistry.js";
+export type { BotAgent, BotCategory } from "./botRegistry.js";
+export {
+  buildRobotsTxt,
+  classifyBotUserAgent,
+  clearBotUserAgentCache,
+  createBotPolicy,
+  isAiBotCategory,
+  matchBotUserAgent,
+} from "./bots.js";
+export type { BotPolicy, BotPolicyOptions, BotVerdict, RobotsTxtOptions } from "./bots.js";
+export {
+  clientNetworkKey,
+  isIpInCidr,
+  isPublicIp,
+  isValidTrustProxy,
+  normalizeIp,
+  resolveClientIp,
+} from "./clientIp.js";
+export type { HeaderBag, ResolveClientIpOptions, TrustProxy } from "./clientIp.js";
 export { enrichServerContext } from "./enrich.js";
 export type { EnrichedServerContext } from "./enrich.js";
 export { lookupClientIpGeo } from "./geoip.js";
 export type { IpGeoResult } from "./geoip.js";
+export {
+  createHoneypotField,
+  createHoneytoken,
+  injectHoneytokenLink,
+  isInjectableHtml,
+} from "./honeytoken.js";
+export type {
+  HoneypotField,
+  HoneypotFieldOptions,
+  Honeytoken,
+  HoneytokenOptions,
+  HoneytokenSnapshot,
+} from "./honeytoken.js";
 export {
   createIpListChecker,
   getDefaultIpDataDir,
@@ -21,6 +62,45 @@ export {
   resetIpListCheckerCache,
 } from "./ipLists.js";
 export type { IpListChecker, IpListMatchResult, ParsedIp } from "./ipLists.js";
+export { findBodyCloseIndex, injectHoneytokenIntoResponse } from "./htmlInjection.js";
+export { createBotProtection, matchesPathPattern, requestPathForms } from "./protect.js";
+export type {
+  AttackSignatureProtectionOptions,
+  BotPolicyProtectionOptions,
+  BotProtection,
+  BotProtectionOptions,
+  DetectionProtectionOptions,
+  HandledProtectionDecision,
+  HoneytokenProtectionOptions,
+  NormalizedProtectionRequest,
+  PathPattern,
+  ProtectionConclusion,
+  ProtectionDecision,
+  ProtectionHandleOptions,
+  ProtectionMiddleware,
+  ProtectionMiddlewareOptions,
+  ProtectionMode,
+  ProtectionRequest,
+  ProtectionRuleAction,
+  ProtectionRuleOutcome,
+  ProtectionRuleState,
+  ProtectionTrapHit,
+  RateLimitRuleOptions,
+  RobotsTxtProtectionOptions,
+  TrapRecord,
+  TripwireProtectionOptions,
+  TrustedHeaderOptions,
+} from "./protect.js";
+export { createRateLimiter, MemoryRateLimitStore, rateLimitHeaders } from "./rateLimit.js";
+export type {
+  MemoryRateLimitStoreOptions,
+  RateLimitAlgorithm,
+  RateLimitConsumeRequest,
+  RateLimiter,
+  RateLimiterOptions,
+  RateLimitResult,
+  RateLimitStore,
+} from "./rateLimit.js";
 export {
   aggregateServerSuspicionScore,
   detectServerClient,
@@ -35,6 +115,8 @@ export {
 } from "./timezone.js";
 export {
   findTlsFingerprintEntry,
+  getTlsBrowserProfileMismatches,
+  getTlsFingerprintCandidates,
   getUserAgentFamily,
   isBrowserLikeUserAgent,
   isKnownSuspiciousTlsFingerprint,
@@ -44,6 +126,38 @@ export {
   KNOWN_SUSPICIOUS_TLS_FINGERPRINTS,
   normalizeTlsFingerprint,
 } from "./tls.js";
+export {
+  computeJa3,
+  computeJa4,
+  computeTlsFingerprints,
+  getTlsClientHello,
+  isGreaseValue,
+  isValidJa4,
+  parseJa4,
+  parseTlsClientHello,
+  readClientHelloRecords,
+  trackTlsClientHellos,
+} from "./tlsClientHello.js";
+export type {
+  ClientHelloReadState,
+  Ja4Parts,
+  TlsClientHello,
+  TlsFingerprints,
+  TlsTransport,
+  TrackTlsClientHellosOptions,
+} from "./tlsClientHello.js";
+export {
+  canonicalizeRequestPath,
+  createTripwire,
+  DEFAULT_TRIPWIRE_PATHS,
+  DEFAULT_TRIPWIRE_PREFIXES,
+} from "./tripwire.js";
+export type {
+  Tripwire,
+  TripwireMatch,
+  TripwireMatchKind,
+  TripwireOptions,
+} from "./tripwire.js";
 export type {
   CrawlerVerificationStatus,
   ServerClientContext,
@@ -52,5 +166,10 @@ export type {
   ServerSignal,
   ConfidenceLevel as ServerConfidenceLevel,
 } from "./types.js";
-export type { TlsFingerprintEntry, UserAgentFamily } from "./tls.js";
+export type {
+  TlsFingerprintCandidate,
+  TlsFingerprintEntry,
+  TlsFingerprintSource,
+  UserAgentFamily,
+} from "./tls.js";
 export { isBotUserAgent } from "../userAgent.js";

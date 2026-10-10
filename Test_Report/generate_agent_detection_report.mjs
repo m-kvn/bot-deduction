@@ -27,11 +27,11 @@ const images = {
   osInjection: await asImage("os_injection_detected.png"),
 };
 
-const detectionCategories = new Set(["Server detection", "API bypass", "Browser detection"]);
+const detectionCategories = new Set(["Server detection", "API bypass", "Browser detection", "Honeypot"]);
 const detectionCases = data.results
   .filter((item) => detectionCategories.has(item.category))
   .map((item) => {
-    const expectedVerdict = item.expected;
+    const expectedVerdict = item.expected.startsWith("AGENT") ? "AGENT" : item.expected;
     const actualVerdict = item.actual.startsWith("AGENT") ? "AGENT" : "HUMAN";
     return { ...item, expectedVerdict, actualVerdict };
   });
@@ -46,6 +46,7 @@ const groupStats = [
   { label: "Server request / identity signals", category: "Server detection" },
   { label: "Direct API and forged payloads", category: "API bypass" },
   { label: "Browser fingerprint and behavior", category: "Browser detection" },
+  { label: "Honeypot field and honeytoken traps", category: "Honeypot" },
 ].map(({ label, category }) => {
   const cases = detectionCases.filter((item) => item.category === category);
   const agents = cases.filter((item) => item.expectedVerdict === "AGENT");

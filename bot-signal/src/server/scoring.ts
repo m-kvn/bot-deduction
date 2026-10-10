@@ -1,7 +1,9 @@
 import { createAutomationAssessment } from "../automation.js";
+import type { AutomationKind } from "../automation.js";
 import { getBotUserAgentKind } from "../userAgent.js";
 import { enrichServerContext } from "./enrich.js";
 import { buildServerSignals } from "./analysis.js";
+import { classifyBotUserAgent } from "./bots.js";
 import type {
   ConfidenceLevel,
   ServerClientContext,
@@ -12,11 +14,36 @@ import type {
 import type { EnrichedServerContext } from "./enrich.js";
 import {
   findTlsFingerprintEntry,
+  getTlsFingerprintCandidates,
   getUserAgentFamily,
   isTlsUserAgentMismatch,
   KNOWN_SUSPICIOUS_TLS_FINGERPRINTS,
 } from "./tls.js";
 import type { TlsFingerprintEntry } from "./tls.js";
+import { computeTlsFingerprints } from "./tlsClientHello.js";
+import type { TlsClientHello } from "./tlsClientHello.js";
+
+const DECLARED_BOT_AUTOMATION_KINDS: Readonly<Record<string, AutomationKind>> = {
+  scrapy: "python",
+  beautifulsoup: "python",
+  httpx: "python",
+  aiohttp: "python",
+  "python-requests": "python",
+  "python-urllib": "python",
+  python: "python",
+  colly: "go",
+  "go-http-client": "go",
+  jsoup: "java",
+  okhttp: "java",
+  "apache-httpclient": "java",
+  java: "java",
+  curl: "curl",
+  headlesschrome: "browser-automation",
+  puppeteer: "puppeteer",
+  playwright: "playwright",
+  selenium: "selenium",
+  phantomjs: "phantomjs",
+};
 
 /**
  * Combines triggered signal weights into one score:
@@ -66,6 +93,7 @@ export function resolveServerConfidence(
 function buildResultContext(
   context: EnrichedServerContext,
 ): ServerClientResult["context"] {
+  const declaredBot = classifyBotUserAgent(context.userAgent);
   return {
     clientIp: context.clientIp,
     ipTimezone: context.ipTimezone,
@@ -91,7 +119,19 @@ function buildResultContext(
     crawlerVerificationStatus: context.crawlerVerificationStatus,
     datacenterProvider: context.datacenterProvider,
     icloudRelayCountry: context.icloudRelayCountry,
+    ...tlsResultContext(context.tlsClientHello),
+    ...(declaredBot.known ? { declaredBot } : {}),
   };
+}
+
+function tlsResultContext(
+  hello: TlsClientHello | undefined,
+): Pick<ServerClientResult["context"], "tlsJa3" | "tlsJa3Hash" | "tlsJa4"> {
+  if (!hello) {
+    return {};
+  }
+  const { ja3, ja3Hash, ja4 } = computeTlsFingerprints(hello);
+  return { tlsJa3: ja3, tlsJa3Hash: ja3Hash, tlsJa4: ja4 };
 }
 
 function classifyServerAutomation(
@@ -106,31 +146,30 @@ function classifyServerAutomation(
         ? "Trusted edge conclusively rejected the claimed crawler identity"
         : undefined;
   const uaFamily = getUserAgentFamily(context.userAgent);
-  const tlsEntry = context.tlsFingerprint
-    ? findTlsFingerprintEntry(
-        context.tlsFingerprint,
-        suspiciousTlsFingerprints,
-        context.tlsFingerprintType,
-        suspiciousTlsFingerprintEntries,
-      )
-    : undefined;
-  const hasFamilyLabel = Boolean(
-    tlsEntry &&
-      (KNOWN_SUSPICIOUS_TLS_FINGERPRINTS.includes(tlsEntry) ||
-        suspiciousTlsFingerprintEntries.includes(tlsEntry)),
-  );
-  const tlsSupportsUa = Boolean(
-    hasFamilyLabel &&
-      context.tlsFingerprint &&
-      context.userAgent &&
-      !isTlsUserAgentMismatch(
-        context.tlsFingerprint,
-        context.userAgent,
-        suspiciousTlsFingerprints,
-        context.tlsFingerprintType,
-        suspiciousTlsFingerprintEntries,
-      ),
-  );
+  const labelledEntries = [
+    ...KNOWN_SUSPICIOUS_TLS_FINGERPRINTS,
+    ...suspiciousTlsFingerprintEntries,
+  ];
+  const tlsSupportsUa = getTlsFingerprintCandidates(context).some((candidate) => {
+    const entry = findTlsFingerprintEntry(
+      candidate.fingerprint,
+      suspiciousTlsFingerprints,
+      candidate.type,
+      suspiciousTlsFingerprintEntries,
+    );
+    return Boolean(
+      entry &&
+        labelledEntries.includes(entry) &&
+        context.userAgent &&
+        !isTlsUserAgentMismatch(
+          candidate.fingerprint,
+          context.userAgent,
+          suspiciousTlsFingerprints,
+          candidate.type,
+          suspiciousTlsFingerprintEntries,
+        ),
+    );
+  });
   if (["curl", "python", "go", "java"].includes(uaFamily)) {
     return createAutomationAssessment(
       true,
@@ -163,6 +202,19 @@ function classifyServerAutomation(
           : []),
       ],
       [...alternatives],
+    );
+  }
+
+  const declaredBot = classifyBotUserAgent(context.userAgent);
+  if (declaredBot.known) {
+    return createAutomationAssessment(
+      true,
+      DECLARED_BOT_AUTOMATION_KINDS[declaredBot.id as string] ?? "unknown",
+      crawlerVerificationEvidence ? "high" : "medium",
+      [
+        `User-Agent declares ${declaredBot.name} (${declaredBot.category})`,
+        ...(crawlerVerificationEvidence ? [crawlerVerificationEvidence] : []),
+      ],
     );
   }
 

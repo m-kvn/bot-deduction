@@ -5,6 +5,8 @@ import {
 } from "./timezone.js";
 import {
   findTlsFingerprintEntry,
+  getTlsBrowserProfileMismatches,
+  getTlsFingerprintCandidates,
   getUserAgentFamily,
   isBrowserLikeUserAgent,
   isKnownSuspiciousTlsFingerprint,
@@ -18,6 +20,7 @@ import type {
   ServerSignal,
 } from "./types.js";
 import { isBotUserAgent } from "../userAgent.js";
+import { classifyBotUserAgent } from "./bots.js";
 
 function createSignal(
   id: string,
@@ -234,6 +237,14 @@ export function isMissingBrowserHeaders(
   );
 }
 
+export function isDeclaredBotAgent(userAgent: string | undefined): boolean {
+  return (
+    classifyBotUserAgent(userAgent).known &&
+    !isScriptingUserAgent(userAgent) &&
+    !isBotUserAgent(userAgent)
+  );
+}
+
 /**
  * Evaluates every server-side heuristic and returns the weighted signal list.
  * @internal
@@ -248,14 +259,19 @@ export function buildServerSignals(
     options.suspiciousTlsFingerprintEntries ?? [];
   const requireTlsFingerprint = options.requireTlsFingerprint ?? false;
   const requireBrowserHeaders = options.requireBrowserHeaders ?? false;
-  const suspiciousTlsEntry = context.tlsFingerprint
-    ? findTlsFingerprintEntry(
-        context.tlsFingerprint,
+  const tlsCandidates = getTlsFingerprintCandidates(context);
+  const suspiciousTlsEntry = tlsCandidates
+    .map((candidate) =>
+      findTlsFingerprintEntry(
+        candidate.fingerprint,
         suspiciousTlsFingerprints,
-        context.tlsFingerprintType,
+        candidate.type,
         suspiciousTlsFingerprintEntries,
-      )
-    : undefined;
+      ),
+    )
+    .find((entry) => entry !== undefined);
+  const tlsProfileMismatches = getTlsBrowserProfileMismatches(context);
+  const declaredBot = classifyBotUserAgent(context.userAgent);
 
   return [
     createSignal(
@@ -271,6 +287,15 @@ export function buildServerSignals(
       isBotUserAgent(context.userAgent),
       0.9,
       "high",
+    ),
+    createSignal(
+      "declared-bot-agent",
+      declaredBot.known
+        ? `User-Agent declares ${declaredBot.name} (${declaredBot.category})`
+        : "User-Agent declares a known automated agent",
+      isDeclaredBotAgent(context.userAgent),
+      0.6,
+      "medium",
     ),
     createSignal(
       "crawler-identity-spoofed",
@@ -348,11 +373,13 @@ export function buildServerSignals(
       suspiciousTlsEntry
         ? `TLS fingerprint matches ${suspiciousTlsEntry.label}`
         : "TLS fingerprint matches a known automation/scripting client",
-      isKnownSuspiciousTlsFingerprint(
-        context.tlsFingerprint,
-        suspiciousTlsFingerprints,
-        context.tlsFingerprintType,
-        suspiciousTlsFingerprintEntries,
+      tlsCandidates.some((candidate) =>
+        isKnownSuspiciousTlsFingerprint(
+          candidate.fingerprint,
+          suspiciousTlsFingerprints,
+          candidate.type,
+          suspiciousTlsFingerprintEntries,
+        ),
       ),
       0.55,
       suspiciousTlsEntry?.confidence ?? "high",
@@ -360,21 +387,32 @@ export function buildServerSignals(
     createSignal(
       "tls-user-agent-mismatch",
       "TLS fingerprint is inconsistent with the declared user agent",
-      isTlsUserAgentMismatch(
-        context.tlsFingerprint,
-        context.userAgent,
-        suspiciousTlsFingerprints,
-        context.tlsFingerprintType,
-        suspiciousTlsFingerprintEntries,
+      tlsCandidates.some((candidate) =>
+        isTlsUserAgentMismatch(
+          candidate.fingerprint,
+          context.userAgent,
+          suspiciousTlsFingerprints,
+          candidate.type,
+          suspiciousTlsFingerprintEntries,
+        ),
       ),
       0.5,
       suspiciousTlsEntry?.confidence ?? "high",
     ),
     createSignal(
+      "tls-browser-profile-mismatch",
+      tlsProfileMismatches.length > 0
+        ? `TLS handshake contradicts the browser User-Agent: ${tlsProfileMismatches.join("; ")}`
+        : "TLS handshake contradicts the browser User-Agent",
+      tlsProfileMismatches.length > 0,
+      0.45,
+      "medium",
+    ),
+    createSignal(
       "missing-tls-fingerprint",
       "Browser-like user agent without a TLS fingerprint",
       isMissingTlsFingerprint(
-        context.tlsFingerprint,
+        tlsCandidates[0]?.fingerprint,
         context.userAgent,
         requireTlsFingerprint,
       ),

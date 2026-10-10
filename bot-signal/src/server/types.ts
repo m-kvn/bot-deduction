@@ -1,5 +1,7 @@
 import type { AutomationAssessment } from "../automation.js";
 import type { TlsFingerprintEntry } from "./tls.js";
+import type { TlsClientHello } from "./tlsClientHello.js";
+import type { BotVerdict } from "./bots.js";
 
 export type ConfidenceLevel = "high" | "medium" | "low";
 
@@ -26,6 +28,7 @@ export interface ServerClientContext {
   tlsFingerprint?: string;
   /** Defaults to `ja3` */
   tlsFingerprintType?: "ja3" | "ja4";
+  tlsClientHello?: TlsClientHello;
   userAgent?: string;
   /** User-Agent reported by browser JavaScript, for header/realm comparison */
   clientUserAgent?: string;
@@ -96,6 +99,9 @@ export interface ServerClientResult {
     clientTimezone?: string;
     tlsFingerprint?: string;
     tlsFingerprintType?: "ja3" | "ja4";
+    tlsJa3?: string;
+    tlsJa3Hash?: string;
+    tlsJa4?: string;
     userAgent?: string;
     clientUserAgent?: string;
     acceptLanguage?: string;
@@ -115,5 +121,6 @@ export interface ServerClientResult {
     crawlerVerificationStatus?: CrawlerVerificationStatus;
     datacenterProvider?: string;
     icloudRelayCountry?: string;
+    declaredBot?: BotVerdict;
   };
 }

@@ -1,9 +1,19 @@
-import { createServer } from "node:http";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
-import { detectServerClientAsync, preloadIpLists } from "../../dist/server.js";
+import {
+  createBotProtection,
+  detectServerClientAsync,
+  getTlsClientHello,
+  isPublicIp,
+  preloadIpLists,
+  resolveClientIp,
+  trackTlsClientHellos,
+} from "../../dist/server.js";
 import { analyzeBehavioralSamples } from "../../dist/index.js";
 import {
   BEHAVIORAL_SCORE_THRESHOLD,
@@ -134,6 +144,22 @@ const MIN_SUPPORTING_SIGNALS = 2;
 // A US visitor geolocated to another US zone is off by up to 3 hours, so the
 // default 60-minute tolerance would flag them.
 const TZ_TOLERANCE_MINUTES = Number(process.env.TZ_TOLERANCE_MINUTES ?? 180);
+
+const PROTECTION_MODE = process.env.PROTECTION_MODE === "monitor" ? "monitor" : "enforce";
+const TRUST_PROXY_HOPS = Number(process.env.TRUST_PROXY_HOPS ?? 1);
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000);
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX ?? 600);
+const SUBMIT_RATE_LIMIT_MAX = Number(process.env.SUBMIT_RATE_LIMIT_MAX ?? 30);
+const TRAP_LOCKOUT_MS = Number(process.env.TRAP_LOCKOUT_MS ?? 0);
+const BOT_POLICY_DENY = (process.env.BOT_POLICY_DENY ?? "training_crawler")
+  .split(",")
+  .map((entry) => entry.trim())
+  .filter(Boolean);
+const TLS_CERT_FILE = process.env.TLS_CERT_FILE;
+const TLS_KEY_FILE = process.env.TLS_KEY_FILE;
+const HONEYPOT_FIELD = "hp_check";
+const MAX_PROTECTION_EVENTS = 500;
+const protectionEvents = [];
 
 function parseTlsEntries(raw) {
   if (!raw) return [];
@@ -322,32 +348,79 @@ function validatePageSession(req, challengePageSessionId) {
 // the proxy's datacenter address and looks alike.
 const CLIENT_IP_HEADER = (process.env.CLIENT_IP_HEADER ?? "x-forwarded-for").toLowerCase();
 
+const TRUST_PROXY = !TRUST_EDGE_HEADERS
+  ? false
+  : CLIENT_IP_HEADER === "x-forwarded-for"
+    ? TRUST_PROXY_HOPS
+    : { header: CLIENT_IP_HEADER };
+
 function clientIp(req) {
-  const forwarded = TRUST_EDGE_HEADERS ? header(req, CLIENT_IP_HEADER) : undefined;
-  const raw = forwarded?.split(",")[0]?.trim() || req.socket.remoteAddress || "";
-  return raw.replace(/^::ffff:/, "");
+  return (
+    resolveClientIp({ headers: req.headers, peer: req.socket.remoteAddress, trustProxy: TRUST_PROXY }) ??
+    ""
+  );
 }
 
-// The bundled GeoIP database answers for loopback and RFC1918 ranges too
-// (127.0.0.1 resolves to Asia/Tokyo), which would fire timezone and country
-// mismatches for every local visitor — so those addresses are never looked up.
-function isPublicIp(ip) {
-  if (!ip) return false;
+const protection = createBotProtection({
+  mode: PROTECTION_MODE,
+  trustProxy: TRUST_PROXY,
+  trustedHeaders: TRUST_EDGE_HEADERS ? { crawlerVerification: "x-crawler-verification" } : {},
+  honeytoken: { secret: process.env.HONEYTOKEN_SECRET || undefined },
+  tripwire: { lockoutMs: TRAP_LOCKOUT_MS },
+  attackSignatures: { dryRun: false },
+  bots: BOT_POLICY_DENY.length > 0 ? { deny: BOT_POLICY_DENY } : false,
+  rateLimit: [
+    ...(RATE_LIMIT_MAX > 0
+      ? [{ name: "api-rate-limit", max: RATE_LIMIT_MAX, windowMs: RATE_LIMIT_WINDOW_MS, algorithm: "sliding", paths: ["/api/"] }]
+      : []),
+    ...(SUBMIT_RATE_LIMIT_MAX > 0
+      ? [
+          {
+            name: "submit-rate-limit",
+            max: SUBMIT_RATE_LIMIT_MAX,
+            windowMs: RATE_LIMIT_WINDOW_MS,
+            algorithm: "sliding",
+            paths: ["/api/submit"],
+            methods: ["POST"],
+          },
+        ]
+      : []),
+  ],
+  detection: false,
+});
 
-  const ipv4 = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/);
-  if (ipv4) {
-    const [first, second] = [Number(ipv4[1]), Number(ipv4[2])];
-    if (first === 0 || first === 10 || first === 127) return false;
-    if (first === 169 && second === 254) return false;
-    if (first === 172 && second >= 16 && second <= 31) return false;
-    if (first === 192 && second === 168) return false;
-    if (first === 100 && second >= 64 && second <= 127) return false;
-    return true;
+function recordProtectionEvent(req, decision) {
+  const flagged = decision.results.find((outcome) => outcome.action !== "ALLOW");
+  if (!flagged) return;
+  const enforcedTrap = decision.results.some(
+    (outcome) =>
+      (outcome.rule === "honeytoken" || outcome.rule === "tripwire") &&
+      outcome.state === "RUN" &&
+      outcome.action === "DENY",
+  );
+  if (enforcedTrap && decision.trapHit) {
+    const { session } = currentPageSession(req);
+    if (session && !session.trapped) {
+      session.trapped = {
+        path: decision.trapHit.path,
+        at: Date.now(),
+        honeytoken: decision.trapHit.honeytoken,
+      };
+    }
   }
-
-  const lower = ip.toLowerCase();
-  if (lower === "::" || lower === "::1") return false;
-  return !/^(f[cd]|fe[89ab])/.test(lower);
+  protectionEvents.unshift({
+    at: new Date().toISOString(),
+    rule: flagged.rule,
+    state: flagged.state,
+    action: flagged.action,
+    reason: flagged.reason ?? "",
+    blocked: decision.blocked,
+    method: decision.method,
+    path: decision.path,
+    ip: decision.clientIp ?? "unknown",
+    userAgent: (header(req, "user-agent") ?? "").slice(0, 200),
+  });
+  protectionEvents.length = Math.min(protectionEvents.length, MAX_PROTECTION_EVENTS);
 }
 
 let proxyWarningShown = false;
@@ -731,6 +804,13 @@ function assessRisk(req, form, pageSession) {
 
   if (record.sessions > MAX_SESSIONS_PER_IP) {
     reasons.push(`${record.sessions} page loads from this address in the same window`);
+  }
+
+  const trap = protection.getTrap(ip);
+  if (trap && !pageSession?.trapped) {
+    reasons.push(
+      `this address requested the hidden trap path ${trap.path} ${Math.round((Date.now() - trap.lastAt) / 1000)}s ago`,
+    );
   }
 
   if (pageSession) {
@@ -1144,6 +1224,23 @@ async function handleSubmit(req, res) {
       ),
     );
   }
+  const honeypotValue = isObject(payload.form) ? payload.form[HONEYPOT_FIELD] : undefined;
+  if (honeypotValue !== undefined && honeypotValue !== null && String(honeypotValue).trim() !== "") {
+    clientSignals.push(
+      clientSignal(
+        "honeypot-field-filled",
+        "A form field that is invisible, unfocusable and hidden from assistive technology was filled in",
+      ),
+    );
+  }
+  if (pageSession?.trapped) {
+    clientSignals.push(
+      clientSignal(
+        "honeytoken-tripped",
+        `This page session requested the hidden trap path ${pageSession.trapped.path}, which only link-harvesting automation can find`,
+      ),
+    );
+  }
 
   const ja4 = TRUST_EDGE_HEADERS ? header(req, "x-ja4") : undefined;
   const ja3 = TRUST_EDGE_HEADERS ? header(req, "x-ja3-hash") : undefined;
@@ -1167,6 +1264,7 @@ async function handleSubmit(req, res) {
       secFetchDest: header(req, "sec-fetch-dest"),
       tlsFingerprint: ja4 ?? ja3,
       tlsFingerprintType: ja4 ? "ja4" : "ja3",
+      tlsClientHello: getTlsClientHello(req.socket),
       crawlerVerificationStatus: CRAWLER_STATUSES.has(crawlerVerification)
         ? crawlerVerification
         : undefined,
@@ -1283,7 +1381,11 @@ async function handleSubmit(req, res) {
   });
 }
 
-const server = createServer(async (req, res) => {
+async function handleRequest(req, res) {
+  const decision = await protection.handle(req, res, { serveRobotsTxt: true });
+  recordProtectionEvent(req, decision);
+  if (decision.responded) return;
+
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
   if (req.method === "GET" && url.pathname === "/api/challenge") {
@@ -1305,8 +1407,17 @@ const server = createServer(async (req, res) => {
     });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/protection") {
+    return sendJson(res, 200, {
+      mode: PROTECTION_MODE,
+      transport: TLS_CERT_FILE && TLS_KEY_FILE ? "https" : "http",
+      events: protectionEvents.slice(0, LIST_LIMIT),
+    });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/reset") {
     clearSubmissions();
+    protectionEvents.length = 0;
     return sendJson(res, 200, { ok: true });
   }
 
@@ -1329,13 +1440,21 @@ const server = createServer(async (req, res) => {
   if (name.endsWith(".html")) startPageSession(req, res, `/${name}`);
   else recordAssetLoad(req, `/${name}`);
   return sendFile(res, target);
-});
+}
+
+const scheme = TLS_CERT_FILE && TLS_KEY_FILE ? "https" : "http";
+const server =
+  scheme === "https"
+    ? createHttpsServer({ cert: readFileSync(TLS_CERT_FILE), key: readFileSync(TLS_KEY_FILE) }, handleRequest)
+    : createHttpServer(handleRequest);
+if (scheme === "https") trackTlsClientHellos(server);
 
 await preloadIpLists();
 
 server.listen(PORT, HOST, () => {
-  console.log(`Listening:  ${HOST}:${PORT}`);
-  console.log(`Form:      http://localhost:${PORT}/`);
-  console.log(`Dashboard: http://localhost:${PORT}/dashboard.html`);
+  console.log(`Listening:  ${HOST}:${PORT} (${scheme})`);
+  console.log(`Form:      ${scheme}://localhost:${PORT}/`);
+  console.log(`Dashboard: ${scheme}://localhost:${PORT}/dashboard.html`);
   console.log(`SQLite:    ${dbFile}`);
+  console.log(`Protection: ${PROTECTION_MODE}, robots.txt at /robots.txt`);
 });

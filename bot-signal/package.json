@@ -1,7 +1,7 @@
 {
   "name": "bot-signal",
   "version": "2.0.14",
-  "description": "Bot detection for JavaScript and Node.js: detect headless Chrome, Playwright, Puppeteer, Selenium and scripted input. Simple isHuman() API plus weighted instant, behavioral, and server signals (IP, TLS/JA3, timezone). No API keys.",
+  "description": "Bot detection for JavaScript and Node.js: detect headless Chrome, Playwright, Puppeteer, Selenium and scripted input. Simple isHuman() API plus weighted instant, behavioral, and server signals (IP, TLS/JA3/JA4, timezone), and request protection middleware (tripwires, honeytokens, bot policy, rate limiting). No API keys.",
   "license": "MIT",
   "author": "okasi",
   "repository": {
@@ -134,7 +134,15 @@
     "anti-detect",
     "browser-fingerprinting",
     "device-fingerprint",
-    "web-scraping-protection"
+    "web-scraping-protection",
+    "ja4",
+    "honeypot",
+    "honeytoken",
+    "tripwire",
+    "rate-limit",
+    "ai-crawler",
+    "robots-txt",
+    "middleware"
   ],
   "dependencies": {
     "doc999tor-fast-geoip": "^1.1.443"

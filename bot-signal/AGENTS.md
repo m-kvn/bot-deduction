@@ -11,6 +11,7 @@ TypeScript npm library with three detection layers:
 | Instant (browser) | `detectInstantClient` | `src/detectInstantClient.ts`, `src/checks.ts`, `src/asyncChecks.ts`, `src/webgpu.ts` |
 | Behavioral (browser) | `createBehavioralClientDetector` | `src/behavioral/` |
 | Server (Node) | `detectServerClientAsync` | `src/server/` |
+| Request protection (Node) | `createBotProtection` | `src/server/protect.ts` and the modules it composes |
 
 `src/automation.ts` contains the shared best-effort attribution result types.
 Instant and server results expose `automation` (`kind`, confidence, evidence,
@@ -48,8 +49,18 @@ src/
     enrich.ts                 # auto-fill context from clientIp
     analysis.ts               # request contradictions + trusted crawler-verification verdict
     scoring.ts                # detectServerClient(Async)
-    tls.ts                    # JA3 blocklist + UA mismatch
+    tls.ts                    # JA3/JA4 lists, UA mismatch, TLS browser-profile checks
+    tlsClientHello.ts         # ClientHello parser, local JA3/JA4, trackTlsClientHellos
     timezone.ts               # TZ offset + accept-language checks
+    protect.ts                # createBotProtection: ordered rules, decision, middleware
+    htmlInjection.ts          # streaming honeytoken injection into HTML responses
+    tripwire.ts               # scanner bait paths + path canonicalisation
+    honeytoken.ts             # HMAC honeytoken link, HTML injection, form honeypot field
+    bots.ts                   # registry classification, bot policy, robots.txt
+    botRegistry.ts            # 186-agent table ported from WebDecoy (order is significant)
+    attackSignatures.ts       # narrow SQLi/XSS/traversal/shell/JNDI signatures
+    rateLimit.ts              # fixed/sliding windows, bounded memory store, store interface
+    clientIp.ts               # right-to-left proxy trust, CIDR matching, public-IP test
     types.ts
 data/                         # bundled blocklists (shipped in npm package)
 docs/                         # GitHub Pages demo source (index.html + app.js)
@@ -146,6 +157,42 @@ Anything a browser's fingerprint protection is free to rewrite — locale,
 on. Build cross-realm and consistency checks on values protection does not
 touch.
 
+## Request protection
+
+`createBotProtection` evaluates rules in a fixed order — `test-trigger`,
+`honeytoken`, `tripwire`, `trap-lockout`, `attack-signatures`, `bots`, rate limits,
+`detection` — and records an outcome for every rule (`RUN`, `DRY_RUN`, `NOT_RUN`).
+The first `RUN` outcome whose action is not `ALLOW` decides. Keep these invariants
+when changing it:
+
+- `mode: "monitor"` is the default and never refuses; `blocked` is only true in
+  enforce mode. A rule that cannot run reports `NOT_RUN`, and a failure inside
+  `protect()` returns conclusion `ERROR` with `allowed: true` (fail open).
+- Rules see every reading of the target (`requestPathForms`: raw, canonical,
+  WHATWG pathname; absolute-form origins stripped). Protective matches (traps,
+  rate-limit paths) succeed on any reading, case-insensitively; skip paths only
+  when every reading matches.
+- The honeytoken must be armed before it is advertised: injection and matching
+  both read `honeytoken.current()`; `robotsTxt()` disallows it. Only an
+  edge-verified crawler is exempt. Cross-site, same-site, subresource and
+  prefetch requests are never recorded as trap hits (no lockout poisoning), and
+  dry-run hits are never recorded.
+- Clients are keyed by `clientNetworkKey`: the IPv4 address, or the IPv6 /64.
+- Never read the leftmost `X-Forwarded-For` entry. `resolveClientIp` counts
+  trusted hops from the right.
+- `htmlInjection.ts` only rewrites uncompressed, ASCII-compatible `text/html`
+  200 responses to GET requests. It splices bytes before the last `</body>`
+  found outside scripts, styles and comments; streams with an 8-byte holdback
+  when no `Content-Length` is declared; buffers (up to 2 MB) and adjusts the
+  length when one is. It never restores the original `writeHead`/`write`/`end`,
+  because later middleware (sessions, compression) may have wrapped them.
+- `botRegistry.ts` is generated from WebDecoy's registry; do not sort it (first
+  match wins). `matchBotUserAgent` ignores app names inside browser-shaped UAs
+  with no crawler declaration, so in-app browsers are not read as crawlers.
+- `tls-browser-profile-mismatch` asserts browser behaviour; re-run
+  `Test_Report/probe/tls_profile_probe.mjs` against real browsers before
+  changing what it checks.
+
 ## IP blocklists
 
 **Do not hand-edit** `data/*.csv`. Update `scripts/update-ip-data.ts` instead.
@@ -189,6 +236,8 @@ server 0.5.
 - Browser instant unit tests mock `window` / `navigator` with prototype-based `webdriver`
 - Patchright tests (`test/patchright/`) run detection in real Chromium via `test/helpers/patchright-harness.ts`; `runInstantDetection(page, { scoreThreshold })` passes options through
 - GeoIP tests call real `lookup("8.8.8.8")` — requires `doc999tor-fast-geoip` data in node_modules
+- TLS tests start real `https` servers with `test/fixtures/tls-localhost-*.pem` (self-signed, test-only) and build ClientHello bytes with `test/helpers/tls-hello.ts`; the JA3/JA4 reference vectors are asserted exactly
+- Protection tests drive `handle()`/`middleware()` through real `node:http` servers and `fetch`, including the response-injection paths
 
 ## Package publishing
 

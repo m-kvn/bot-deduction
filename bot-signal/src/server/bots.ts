@@ -1,0 +1,214 @@
+import { BOT_CATEGORIES, BOT_REGISTRY } from "./botRegistry.js";
+import type { BotAgent, BotCategory } from "./botRegistry.js";
+
+export interface BotVerdict {
+  known: boolean;
+  id?: string;
+  name?: string;
+  category: BotCategory;
+  organization?: string;
+  score: number;
+  respectsRobots?: boolean;
+  isAI: boolean;
+}
+
+export interface BotPolicyOptions {
+  deny?: readonly string[];
+  allow?: readonly string[];
+}
+
+export interface RobotsTxtOptions {
+  policy?: BotPolicy;
+  disallow?: readonly string[];
+  sitemap?: string;
+  crawlDelay?: number;
+  annotate?: boolean;
+}
+
+export interface BotPolicy {
+  readonly matched: readonly BotAgent[];
+  readonly unenforceable: readonly BotAgent[];
+  denies(verdict: BotVerdict): boolean;
+  robotsTxt(options?: Omit<RobotsTxtOptions, "policy">): string;
+}
+
+const AI_CATEGORIES: ReadonlySet<BotCategory> = new Set<BotCategory>([
+  "training_crawler",
+  "ai_search_crawler",
+  "ai_agent",
+  "ai_assistant",
+]);
+
+const UNKNOWN_BOT: BotVerdict = Object.freeze({
+  known: false,
+  category: "none" as BotCategory,
+  score: 0,
+  isAI: false,
+});
+
+const BROWSER_SHAPED_USER_AGENT =
+  /^Mozilla\/5\.0 \((?!compatible;)[^)]*\) (?:AppleWebKit|Gecko)\//i;
+const CRAWLER_DECLARATION = /compatible;|\+https?:\/\/|bot\b|bot\/|spider|crawl/i;
+const ROBOTS_TOKEN = /^[a-z0-9._-]+$/i;
+const MAX_CACHE_ENTRIES = 1000;
+
+const matchCache = new Map<string, BotAgent | null>();
+
+function containsToken(userAgent: string, pattern: string): boolean {
+  let index = userAgent.indexOf(pattern);
+  while (index !== -1) {
+    if (index === 0 || !/[a-z0-9]/.test(userAgent[index - 1])) {
+      return true;
+    }
+    index = userAgent.indexOf(pattern, index + 1);
+  }
+  return false;
+}
+
+export function matchBotUserAgent(
+  userAgent: string | undefined,
+): BotAgent | undefined {
+  if (!userAgent) {
+    return undefined;
+  }
+
+  const cached = matchCache.get(userAgent);
+  if (cached !== undefined) {
+    return cached ?? undefined;
+  }
+
+  const lower = userAgent.toLowerCase();
+  const isInAppBrowserShell =
+    BROWSER_SHAPED_USER_AGENT.test(userAgent) &&
+    !CRAWLER_DECLARATION.test(userAgent);
+  const found =
+    BOT_REGISTRY.find(
+      (agent) =>
+        (!isInAppBrowserShell || agent.category === "headless_browser") &&
+        agent.uaPatterns.some((pattern) => containsToken(lower, pattern)),
+    ) ?? null;
+
+  if (matchCache.size >= MAX_CACHE_ENTRIES) {
+    matchCache.clear();
+  }
+  matchCache.set(userAgent, found);
+  return found ?? undefined;
+}
+
+export function classifyBotUserAgent(userAgent: string | undefined): BotVerdict {
+  const agent = matchBotUserAgent(userAgent);
+  if (!agent) {
+    return UNKNOWN_BOT;
+  }
+
+  return {
+    known: true,
+    id: agent.id,
+    name: agent.name,
+    category: agent.category,
+    organization: agent.organization,
+    score: agent.baseScore,
+    respectsRobots: agent.respectsRobots,
+    isAI: AI_CATEGORIES.has(agent.category),
+  };
+}
+
+export function isAiBotCategory(category: BotCategory): boolean {
+  return AI_CATEGORIES.has(category);
+}
+
+export function clearBotUserAgentCache(): void {
+  matchCache.clear();
+}
+
+export function createBotPolicy(options: BotPolicyOptions = {}): BotPolicy {
+  const allow = new Set((options.allow ?? []).map((entry) => entry.toLowerCase()));
+  const categories = new Set<string>();
+  const agents = new Set<string>();
+  let denyAi = false;
+
+  for (const token of options.deny ?? []) {
+    const lower = token.toLowerCase();
+    if (lower === "ai") {
+      denyAi = true;
+    } else if ((BOT_CATEGORIES as readonly string[]).includes(lower)) {
+      categories.add(lower);
+    } else {
+      agents.add(lower);
+    }
+  }
+
+  const matched = BOT_REGISTRY.filter((agent) => {
+    if (allow.has(agent.id) || allow.has(agent.name.toLowerCase())) {
+      return false;
+    }
+    return (
+      (denyAi && AI_CATEGORIES.has(agent.category)) ||
+      categories.has(agent.category) ||
+      agents.has(agent.id) ||
+      agents.has(agent.name.toLowerCase())
+    );
+  });
+  const matchedIds = new Set(matched.map((agent) => agent.id));
+
+  const policy: BotPolicy = {
+    matched,
+    unenforceable: matched.filter((agent) => !agent.respectsRobots),
+    denies: (verdict) =>
+      verdict.known && verdict.id !== undefined && matchedIds.has(verdict.id),
+    robotsTxt: (robotsOptions = {}) =>
+      buildRobotsTxt({ ...robotsOptions, policy }),
+  };
+  return policy;
+}
+
+function robotsToken(agent: BotAgent): string {
+  const pattern = agent.uaPatterns.find((candidate) => ROBOTS_TOKEN.test(candidate));
+  if (pattern && pattern !== agent.name.toLowerCase()) {
+    return pattern;
+  }
+  return ROBOTS_TOKEN.test(agent.name)
+    ? agent.name
+    : agent.name.replace(/[^a-z0-9._-]+/gi, "");
+}
+
+export function buildRobotsTxt(options: RobotsTxtOptions = {}): string {
+  const lines: string[] = [];
+  const policy = options.policy;
+  const annotate = options.annotate ?? true;
+
+  if (annotate) {
+    lines.push("# Generated by bot-signal.");
+    const unenforceable = policy?.unenforceable ?? [];
+    if (unenforceable.length > 0) {
+      lines.push(
+        "# These agents do not document honouring robots.txt; the bot policy enforces it for them:",
+        ...unenforceable.map((agent) => `#   ${agent.name} (${agent.organization})`),
+      );
+    }
+    lines.push("");
+  }
+
+  const tokens = [...new Set((policy?.matched ?? []).map(robotsToken))];
+  if (tokens.length > 0) {
+    lines.push(...tokens.map((token) => `User-agent: ${token}`), "Disallow: /", "");
+  }
+
+  lines.push("User-agent: *");
+  const disallow = [...new Set(options.disallow ?? [])];
+  if (disallow.length === 0) {
+    lines.push("Disallow:");
+  } else {
+    lines.push(...disallow.map((path) => `Disallow: ${path}`));
+  }
+  if (options.crawlDelay !== undefined) {
+    lines.push(`Crawl-delay: ${options.crawlDelay}`);
+  }
+  lines.push("");
+
+  if (options.sitemap) {
+    lines.push(`Sitemap: ${options.sitemap}`, "");
+  }
+
+  return lines.join("\n");
+}

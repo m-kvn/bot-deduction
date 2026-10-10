@@ -9,9 +9,12 @@
 `bot-signal` is an open-source, TypeScript-first bot detection library that scores three
 independent layers: **instant** browser checks (automation artifacts, native tampering,
 cross-realm and GPU contradictions, CDP), **behavioral** analysis of mouse, touch, scroll and
-typing, and **server-side** IP reputation, TLS/JA3 fingerprint and timezone validation. Start
-with one `isHuman()` call, or read every weighted signal yourself. No API keys, no external
-service, no data leaves your infrastructure.
+typing, and **server-side** IP reputation, TLS (JA3/JA4) fingerprint and timezone validation.
+On top of those sits a **request protection** layer for Node: scanner tripwires, a hidden
+honeytoken link, form honeypots, a 186-agent bot registry with a publishable bot policy,
+attack-signature matching and rate limiting, wired into one middleware. Start with one
+`isHuman()` call, or read every weighted signal yourself. No API keys, no external service,
+no data leaves your infrastructure.
 
 [![npm version](https://img.shields.io/npm/v/bot-signal.svg)](https://www.npmjs.com/package/bot-signal)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -36,6 +39,7 @@ Most bot-detection snippets are copy-pasted checks that rot quickly. The `bot-si
 | **Instant** | Browser (sync/async) | Automation artifacts, native tampering, realm/UA/GPU inconsistencies, CDP |
 | **Behavioral** | Browser (over time) | Robotic mouse/scroll/typing, synthetic events |
 | **Server** | Node >= 22 | Datacenter IPs, AbuseIPDB, TLS fingerprint mismatch, timezone spoofing |
+| **Request protection** | Node >= 22 (middleware) | Scanners on bait paths, link harvesters on the hidden honeytoken, declared AI crawlers, injection payloads, request floods |
 
 - **No API keys** — GeoIP and IP blocklists are bundled and updated weekly (note: the full package is ~1.8 MB tarball / ~16 MB unpacked primarily due to the blocklist data)
 - **TypeScript-first** — full types, ESM + CJS, `sideEffects: false`
@@ -79,6 +83,24 @@ if (!result.isLegitClient) {
   return res.status(403).json({ signals: result.signals });
 }
 ```
+
+### Server — protect every request with one middleware
+
+```ts
+import { createBotProtection } from "bot-signal/server";
+
+const protection = createBotProtection({
+  mode: "monitor", // watch first; switch to "enforce" once the decisions look right
+  honeytoken: { secret: process.env.BOT_SIGNAL_SECRET },
+  bots: { deny: ["training_crawler"] },
+  rateLimit: { max: 100, windowMs: 60_000 },
+});
+
+app.use(protection.middleware({ serveRobotsTxt: true }));
+// req.botSignal is the typed decision: conclusion, deciding rule, every rule's outcome
+```
+
+Works with Express, Connect and plain `node:http` (`await protection.handle(req, res)`).
 
 ### Behavioral — catch scripted interaction
 
@@ -241,6 +263,133 @@ Server reputation/geo signals can make `isLegitClient` false without setting
 
 Bundled IP data is refreshed weekly. Run locally: `npm run update:ip-data`.
 
+#### JA3 and JA4 without an edge
+
+When Node terminates TLS itself, the fingerprint can come from the connection
+rather than from a header. `trackTlsClientHellos(server)` reads each ClientHello
+off the raw socket, hands the bytes back to the TLS layer untouched, and keeps
+the parsed hello for the life of the connection:
+
+```ts
+import https from "node:https";
+import { detectServerClientAsync, getTlsClientHello, trackTlsClientHellos } from "bot-signal/server";
+
+const server = https.createServer({ cert, key }, async (req, res) => {
+  const result = await detectServerClientAsync({
+    clientIp: req.socket.remoteAddress,
+    userAgent: req.headers["user-agent"],
+    tlsClientHello: getTlsClientHello(req.socket),
+  });
+});
+trackTlsClientHellos(server);
+```
+
+JA3 and JA4 are computed locally from the hello (`computeJa3`, `computeJa4`,
+`parseTlsClientHello`, verified against the published reference vectors) and
+both are matched against your fingerprint lists. The result context carries
+`tlsJa3`, `tlsJa3Hash` and `tlsJa4`.
+
+Beyond list matching, `tls-browser-profile-mismatch` checks the handshake's
+*shape* against the browser the User-Agent claims: every current browser offers
+TLS 1.3 and HTTP/2 over ALPN, and every Chromium build sends GREASE values.
+Measured on Windows 11 with `Test_Report/probe/tls_profile_probe.mjs` — 18
+handshakes across Chrome, Edge and Firefox on two origins, three runs each:
+
+| Client | JA4 (domain origin) | Flagged when claiming its own UA | Flagged when claiming Chrome |
+|---|---|---|---|
+| Google Chrome | `t13d1517h2_8daaf6152771_cb7bf5808d99` | no | no |
+| Microsoft Edge | `t13d1516h2_8daaf6152771_806a8c22fdea` | no | no |
+| Mozilla Firefox | `t13d1517h2_8daaf6152771_3cbfd9057e0d` | no | yes — no GREASE |
+| Node `https.get` | `t13d521100_…` | — | yes — no ALPN, no GREASE |
+| Node `fetch` (undici) | `t13d5212h1_…` | — | yes — HTTP/1.1 only, no GREASE |
+| Node `http2.connect` | `t13d5212h2_…` | — | yes — no GREASE |
+| `curl.exe` (Schannel) | `t13d2012h1_…` | — | yes — HTTP/1.1 only, no GREASE |
+| PowerShell `Invoke-WebRequest` | `t13d201100_…` | — | yes — no ALPN, no GREASE |
+| Python `urllib` | `t13d181100_…` | — | yes — no ALPN, no GREASE |
+
+It weighs 0.45 — corroborating, never decisive alone — because two real-world
+cases produce it honestly: a TLS-inspecting corporate proxy or antivirus
+re-originates the handshake, and a Firefox user with a User-Agent switcher
+claiming Chrome sends no GREASE.
+
+### Request protection
+
+Fingerprints describe a client; some requests describe themselves. Nobody types
+`/.env`, nobody can see a link with `hidden` and `aria-hidden` on it, and nobody
+posts `' OR 1=1--` by accident. `createBotProtection()` checks those on every
+request, in order, and returns one typed decision:
+
+| Rule | Default | What it catches | Refusal |
+|---|---|---|---|
+| `test-trigger` | on | `BotSignal-Test/…` User-Agent — `curl -A "BotSignal-Test/1.0"` proves enforcement is installed | 403 |
+| `honeytoken` | on | The hidden link injected into every HTML response (`hidden`, `aria-hidden`, `tabindex="-1"`, `rel="nofollow noindex"`, off-screen), at a path derived by HMAC from `honeytoken.secret` so every replica arms the same one. Only a link harvester requests it | 404 |
+| `tripwire` | on | Scanner bait — `/.env*`, `/.git/`, `/.aws/`, `/wp-config.php`, SQL dumps, `/actuator/env` — matched after percent-decoding and dot-segment resolution, so `//x/..%2f.git/config` still trips | 404 |
+| `trap-lockout` | off (`tripwire.lockoutMs`) | Every request from an address that tripped a trap within the window | 403 |
+| `attack-signatures` | on, dry run | A narrow set of SQLi, XSS, traversal, shell and Log4Shell payloads that need real SQL or shell context, in the path and query (decoded per escape, head and tail of oversized input); body and headers opt-in, cookies never. Enforce with `attackSignatures: { dryRun: false }` | 403 |
+| `bots` | off (`bots: { deny }`) | Registry agents by category (`training_crawler`), name (`GPTBot`) or `"ai"`; `allow` always wins | 403 |
+| `rate-limit` | off (`rateLimit`) | Fixed or sliding windows per client — an IPv4 address or an IPv6 /64 — or per your `key`, scoped by `paths` (matched case-insensitively against every reading of the target, absolute-form included) and `methods` | 429 + `Retry-After` |
+| `detection` | off (`detection: true`) | `detectServerClientAsync` on the request's headers, IP and tracked ClientHello; dry run unless `detection: { dryRun: false }` | 403 |
+
+```ts
+const decision = await protection.protect({ method, url, headers, peer });
+
+decision.conclusion; // "ALLOW" | "DENY" | "THROTTLE" | "ERROR"
+decision.blocked;    // true only in enforce mode
+decision.rule;       // the deciding rule, e.g. "honeytoken"
+decision.results;    // every rule: { rule, state: "RUN" | "DRY_RUN" | "NOT_RUN", action, reason }
+decision.bot;        // registry classification of the User-Agent
+decision.trap;       // this address's trap record, if it has walked into one
+```
+
+**Not refusing people** is most of the design:
+
+- `mode: "monitor"` is the default — decisions are computed and attached, nothing
+  is refused until you set `mode: "enforce"`. Every rule also takes `dryRun`,
+  recorded as `DRY_RUN` with the action it would have taken.
+- A rule that could not run says so: a rate limit with no client identity, or a
+  shared store that errored, is `NOT_RUN`; a failure inside protection itself is
+  `ERROR` and lets the request through. A quiet `ALLOW` always means "checked".
+- `robots.txt` (`serveRobotsTxt: true`, or `protection.robotsTxt()`) disallows the
+  honeytoken path and publishes the bot policy from the same object that
+  enforces it, so a real search crawler never requests the trap. Only a crawler
+  your edge *verified* is exempt from a trap: claiming to be Googlebot is the
+  commonest scraper disguise, so the claim alone earns nothing.
+- A trap is only attributed to a request the client made itself. Cross-site and
+  same-site requests, embedded subresources (`Sec-Fetch-Dest` image, script,
+  style, frame…) and prefetch/prerender are answered but never recorded, so
+  another page cannot make your visitors trip a trap by embedding its URL.
+  Dry-run hits are never recorded either.
+- Traps never lock out an address unless you set `lockoutMs`. By default the
+  address is reported on `decision.trap`, so an application can hold that
+  address's next submission for review rather than refuse a whole office NAT.
+- `allowIps` exempts your own ranges; `skipPaths` exempts health checks and
+  static assets, but only when *every* reading of the path — raw, decoded, and
+  as a WHATWG URL — is exempt, so `/health/../admin` and `/static/..%2f..%2fapi`
+  are not skipped.
+
+**Client IP** comes from `trustProxy`: `false` (default — the socket address), a
+hop count (the client is that many entries from the *right* of
+`X-Forwarded-For`), your proxies' CIDRs (walked right to left), or
+`{ header: "cf-connecting-ip" }`. The leftmost `X-Forwarded-For` entry is never
+used — it is the one value in that header the client writes itself.
+
+**Rate-limit state** lives in a bounded in-memory store by default, which is
+correct for one process. With several replicas pass a shared `store` — anything
+with an atomic `consume({ key, max, windowMs, algorithm, now })` returning
+`{ allowed, limit, remaining, count, resetAt, retryAfterSeconds }`. Refused
+requests do not consume budget, so `Retry-After` is accurate.
+
+**Form honeypot.** `createHoneypotField()` renders an off-screen, `aria-hidden`,
+`tabindex="-1"`, `autocomplete="off"` input with a deliberately neutral name
+(`hp_check`) and label ("Leave this field empty"), so no browser autofill
+heuristic recognises it; `field.isFilled(value)` on submit. A bot that fills
+every input fills it.
+
+Every piece is exported on its own as well: `createTripwire`, `createHoneytoken`
++ `injectHoneytokenLink`, `createHoneypotField`, `createBotPolicy` +
+`buildRobotsTxt` + `classifyBotUserAgent`, `findAttackSignature`,
+`createRateLimiter` + `MemoryRateLimitStore`, and `resolveClientIp`.
+
 ---
 
 ## Signals
@@ -397,6 +546,7 @@ the logic.
 |----|--------|------------|-------------|
 | `scripting-user-agent` | 0.75 | medium | UA claims curl/Python/Go/Java |
 | `bot-user-agent` | 0.90 | high | UA claims a conservative known bot, HTTP-client, or automation product token |
+| `declared-bot-agent` | 0.60 | medium | UA declares one of the 186 registry agents (Scrapy, axios, Colly, Nuclei, Bytespider, …) that the two signals above do not already cover |
 | `crawler-identity-spoofed` | 0.95 | high | Trusted Web Bot Auth, FCrDNS/CIDR, or equivalent verification rejected a crawler claim |
 | `client-hints-mismatch` | 0.65 | high | Chromium UA version conflicts with `sec-ch-ua` |
 | `client-user-agent-mismatch` | 0.80 | high | HTTP UA conflicts with `navigator.userAgent` from a client beacon |
@@ -407,6 +557,7 @@ the logic.
 | `timezone-mismatch` | 0.45 | high | Client TZ ≠ GeoIP TZ (sub-threshold: VPNs/travelers don't block alone) |
 | `known-suspicious-tls` | 0.55 | high / entry confidence | JA3/JA4 matches a caller-supplied suspicious value |
 | `tls-user-agent-mismatch` | 0.50 | entry confidence | JA3/JA4 family conflicts with User-Agent |
+| `tls-browser-profile-mismatch` | 0.45 | medium | A browser UA whose handshake offers no TLS 1.3, no ALPN or HTTP/1.1 only, or (Chromium) no GREASE |
 | `missing-tls-fingerprint` | 0.25 | medium | Browser UA without a TLS fingerprint |
 | `accept-language-geo-mismatch` | 0.20 | low | No acceptable Accept-Language country matches GeoIP (region-less, numeric-region, and q=0-only headers pass) |
 | `datacenter-browser-mismatch` | 0.35 | medium | Datacenter IP + browser UA |
@@ -469,8 +620,9 @@ browser feature absence into bot evidence.
 | [BrowserScan](https://www.browserscan.net/) | UA/OS/client-hint, webdriver, screen/touch/memory, canvas, WebGL availability/software GPU, WebGPU feature, timezone/language, IP/blocklist/TLS/JA3/JA4 categories | Detailed GPU “correctness” needs BrowserScan's private population and browser-version baselines |
 | [Scrapfly Browser Fingerprint](https://scrapfly.io/web-scraping-tools/browser-fingerprint) | Consistency signals cover screen, canvas, GPU availability, Navigator, UA-CH, MIME, permissions, timezone, and language | Server-profile population matching plus audio/fonts/codecs/DRM/voices are fingerprint inputs, not direct local automation evidence |
 | [BrowserAudit](https://browseraudit.com/) | No BrowserAudit security-conformance assertions are executed | BrowserAudit is a standards/security suite, not a bot detector; its 400+ assertions are out of scope for bot scoring |
-| [tls.peet.ws](https://tls.peet.ws/) / [fpcheck](https://github.com/North-web-dev/fpcheck) | Their JA3/JA4 portions map to caller-supplied fingerprints, family-labelled profiles, and UA-family mismatch | JA4H, Akamai HTTP/2 settings/order, and raw header-order profiles are not accepted or hardcoded because browser versions and intermediaries change them; callers can enforce trusted edge profiles separately |
-| [CrawlerDetect](https://crawlerdetect.io/) | Conservative bot/crawler UA tokens are detected in both browser and server layers | A broad self-declared-UA corpus is neither proof of automation nor verified crawler identity, so it is not imported wholesale |
+| [tls.peet.ws](https://tls.peet.ws/) / [fpcheck](https://github.com/North-web-dev/fpcheck) | JA3 and JA4 computed locally from the ClientHello when Node terminates TLS, matched against caller-supplied fingerprints and family-labelled profiles, plus structural TLS-version/ALPN/GREASE checks against the claimed browser | JA4H, Akamai HTTP/2 settings/order, and raw header-order profiles are not accepted or hardcoded because browser versions and intermediaries change them; callers can enforce trusted edge profiles separately |
+| [CrawlerDetect](https://crawlerdetect.io/) | Conservative bot/crawler UA tokens are detected in both browser and server layers; the 186-agent WebDecoy registry classifies declared agents for policy and `declared-bot-agent` | App names inside an otherwise ordinary browser UA (Pinterest, NAVER and similar in-app browsers) are deliberately not read as crawlers, and a declared identity is never treated as verified |
+| [WebDecoy](https://github.com/WebDecoy/node) | Tripwire bait paths with path canonicalisation, the HMAC-derived honeytoken link and its HTML injection, the bot registry and published bot policy, attack signatures, fixed/sliding rate limits with pluggable stores, right-to-left proxy trust, monitor/enforce and per-rule dry runs | Hosted scoring, IP enrichment, Web Bot Auth signature verification and the captcha service need WebDecoy's platform or network calls at request time, which this package does not make |
 | [Cloudflare Web Bot Auth test](https://crawltest.com/cdn-cgi/web-bot-auth) | Cryptographic verification is performed at the edge; a successful trusted verdict can feed `crawlerVerificationStatus: "verified"` | This package does not verify HTTP Message Signatures locally; Cloudflare 401 conflates unknown keys with signature failure, so 400/401/non-200 responses must remain `unverified`, not `spoofed` |
 | [Google crawler verification](https://developers.google.com/crawling/docs/crawlers-fetchers/verify-google-requests) / [Bingbot verification](https://www.bing.com/webmasters/help/how-to-verify-bingbot-3905dc26) | A trusted Google/Bing FCrDNS result, or a Google published-IP-range result, can feed `crawlerVerificationStatus`; conclusive spoofing adds a high-confidence signal | DNS verification and Google range refresh belong in infrastructure with caching; lookup failures must remain `unverified`, and Bing ranges must not be hardcoded |
 | [VexTrio Fingerprint Analyzer](https://github.com/HackingLZ/fingerprint_js) — the [threat actor's own script](https://gi7w0rm.medium.com/vextrios-browser-fingerprinting-aeb721be6e30), plus 2022–2025 extensions | Language/screen/platform/`oscpu`/`productSub`/ETSL/WebGL-vendor contradictions, automation globals, permission anomalies, GREASE brands, Intl-vs-`Date` timezone, deviceMemory grid, Apple/Google speech voices | `AudioContext.sampleRate`, `pdfViewerEnabled`, `document.hasFocus()`, and macOS `screen.availTop` are rejected: Bluetooth audio, a user setting, a background tab, and a secondary display each move them on real hardware |
@@ -521,6 +673,22 @@ import {
   isValidJa3Hash,
   KNOWN_SUSPICIOUS_TLS_FINGERPRINTS,
   VERSION,
+} from "bot-signal/server";
+
+// Request protection and its building blocks (Node)
+import {
+  createBotProtection,          // ordered rules -> typed decision, middleware(), handle(), robotsTxt()
+  createTripwire,               // scanner bait paths, canonicalizeRequestPath
+  createHoneytoken,             // HMAC-derived hidden link; injectHoneytokenLink, isInjectableHtml
+  createHoneypotField,          // hidden form field + isFilled()
+  classifyBotUserAgent,         // BOT_REGISTRY lookup -> BotVerdict
+  createBotPolicy,              // deny/allow by category or agent; .robotsTxt()
+  findAttackSignature,          // narrow SQLi/XSS/traversal/shell/JNDI matcher
+  createRateLimiter,            // fixed or sliding window; MemoryRateLimitStore, rateLimitHeaders
+  resolveClientIp,              // right-to-left proxy trust; isIpInCidr, isPublicIp, normalizeIp
+  trackTlsClientHellos,         // capture ClientHellos on a tls/https server; getTlsClientHello
+  computeJa3,
+  computeJa4,                   // also parseTlsClientHello, parseJa4, isGreaseValue
 } from "bot-signal/server";
 ```
 
@@ -591,6 +759,9 @@ if (!server.isLegitClient) return res.status(403).end();
 
 ### Express middleware
 
+`createBotProtection().middleware()` (see [Request protection](#request-protection)) is the
+batteries-included version. Scoring a request by hand looks like this:
+
 ```ts
 import { detectServerClientAsync } from "bot-signal";
 
@@ -637,7 +808,16 @@ Yes. Use instant + behavioral for friction; server detection for authoritative d
 Every layer is weighted, so ambiguous single signals (in-app browsers, F11
 fullscreen, GPU-less VMs, VPN timezone mismatches) flag but don't block on their
 own — they only cross the threshold in combination. Tune `scoreThreshold` per
-layer to trade friction for coverage.
+layer to trade friction for coverage. Request protection starts in `monitor`
+mode, every rule takes `dryRun`, and its traps are paths and fields a person
+cannot reach; see [Request protection](#request-protection).
+
+**Is the honeytoken safe for SEO and accessibility?**
+It carries `rel="nofollow noindex"`, is disallowed in the generated
+`robots.txt`, which real search crawlers obey, and a crawler your edge verified
+is never trapped by it. It is `hidden`, `aria-hidden` and `tabindex="-1"`, so
+neither screen readers nor keyboard navigation reach it. A browser extension
+that fetches every link on a page will trip it from inside a person's session.
 
 **How often is IP data updated?**
 Weekly (Mondays 04:00 UTC). Run `npm run update:ip-data` locally anytime.

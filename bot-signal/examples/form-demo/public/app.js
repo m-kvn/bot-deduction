@@ -408,12 +408,30 @@ function render(data) {
   resultBox.appendChild(linkRow);
 }
 
+function renderThrottled(retryAfter) {
+  resultBox.className = "result bad";
+  resultBox.replaceChildren();
+  const heading = document.createElement("h2");
+  heading.textContent = "Too many requests";
+  const detail = document.createElement("p");
+  detail.className = "muted";
+  detail.textContent = `This address is sending faster than a person fills a form. Try again in ${retryAfter ?? 60}s.`;
+  resultBox.append(heading, detail);
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!event.isTrusted) interaction.untrustedFormEvents += 1;
   behavioralResult = detector.getResult();
   const instant = instantResult ?? (await instantReady);
-  const challenge = await takeFreshChallenge();
+  let challenge;
+  try {
+    challenge = await takeFreshChallenge();
+  } catch {
+    challengeReady = requestChallenge().catch(() => null);
+    renderThrottled();
+    return;
+  }
   const powNonce = solveProofOfWork(challenge.pow);
   const submitIntentAgeMs = interaction.submitIntent
     ? Math.max(0, performance.now() - interaction.submitIntent.at)
@@ -458,5 +476,10 @@ form.addEventListener("submit", async (event) => {
     body: JSON.stringify(payload),
   });
 
-  render(await response.json());
+  const data = await response.json();
+  if (response.status === 429) {
+    renderThrottled(data.retryAfter);
+    return;
+  }
+  render(data);
 });

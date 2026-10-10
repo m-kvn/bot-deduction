@@ -36,8 +36,24 @@ describe("public entry points", () => {
       isClientLanguageMismatch: expect.any(Function),
       isClientPlatformMismatch: expect.any(Function),
       isClientHintsMobileMismatch: expect.any(Function),
+      createBotProtection: expect.any(Function),
+      createRateLimiter: expect.any(Function),
+      createTripwire: expect.any(Function),
+      createHoneytoken: expect.any(Function),
+      createHoneypotField: expect.any(Function),
+      createBotPolicy: expect.any(Function),
+      classifyBotUserAgent: expect.any(Function),
+      findAttackSignature: expect.any(Function),
+      resolveClientIp: expect.any(Function),
+      trackTlsClientHellos: expect.any(Function),
+      computeJa3: expect.any(Function),
+      computeJa4: expect.any(Function),
+      parseTlsClientHello: expect.any(Function),
+      MemoryRateLimitStore: expect.any(Function),
     });
+    expect(serverApi.BOT_REGISTRY.length).toBeGreaterThan(100);
     expect("detectInstantClient" in serverApi).toBe(false);
+    expect("createBotProtection" in browserApi).toBe(false);
   });
 
   it("exports both browser and server APIs from the root entry", () => {
@@ -48,6 +64,8 @@ describe("public entry points", () => {
       hasCdpInputCoordinateLeak: expect.any(Function),
       detectServerClientAsync: expect.any(Function),
       getIpListChecker: expect.any(Function),
+      createBotProtection: expect.any(Function),
+      trackTlsClientHellos: expect.any(Function),
     });
   });
 

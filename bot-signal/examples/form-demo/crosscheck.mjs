@@ -1,9 +1,13 @@
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { Agent, fetch as undiciFetch } from "undici";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const serverPath = join(here, "server.mjs");
+const fixturesDir = join(here, "..", "..", "test", "fixtures");
+const insecureAgent = new Agent({ connect: { rejectUnauthorized: false } });
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
@@ -307,6 +311,30 @@ const CASES = [
     verdict: "agent",
   },
   {
+    name: "hidden honeypot form field filled in",
+    form: { hp_check: "https://spam.example" },
+    expect: ["client:honeypot-field-filled"],
+    verdict: "agent",
+  },
+  {
+    name: "page session followed the hidden honeytoken link",
+    setup: followHoneytoken,
+    expect: ["client:honeytoken-tripped"],
+    verdict: "agent",
+  },
+  {
+    name: "self-declared scraper outside the strict UA list",
+    headers: { "user-agent": "Scrapy/2.11.0 (+https://scrapy.org)" },
+    expect: ["server:declared-bot-agent"],
+    verdict: "agent",
+  },
+  {
+    name: "JA4 shows HTTP/1.1-only ALPN under a Chrome UA",
+    headers: { "x-ja4": "t13d1516h1_8daaf6152771_e5627efa2ab1" },
+    expect: ["server:tls-browser-profile-mismatch"],
+    verdict: "agent",
+  },
+  {
     name: "browser UA without a TLS fingerprint (REQUIRE_TLS=1)",
     env: { REQUIRE_TLS: "1" },
     expect: ["server:missing-tls-fingerprint"],
@@ -314,7 +342,7 @@ const CASES = [
   },
 ];
 
-async function startServer(port, env) {
+async function startServer(port, env, scheme = "http") {
   const child = spawn(process.execPath, [serverPath], {
     env: {
       ...process.env,
@@ -331,7 +359,9 @@ async function startServer(port, env) {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/submissions`);
+      const response = await undiciFetch(`${scheme}://127.0.0.1:${port}/api/submissions`, {
+        dispatcher: insecureAgent,
+      });
       if (response.ok) return child;
     } catch {
       /* not listening yet */
@@ -343,9 +373,31 @@ async function startServer(port, env) {
   throw new Error(`server on ${port} did not start`);
 }
 
+function sessionCookie(response) {
+  return (response.headers.getSetCookie?.() ?? [])
+    .map((cookie) => cookie.split(";")[0])
+    .find((cookie) => cookie.startsWith("bs_page="));
+}
+
+function honeytokenHref(html) {
+  return html.match(/<a href="([^"]+)" rel="nofollow noindex"[^>]*aria-hidden="true"[^>]*hidden/)?.[1];
+}
+
+async function followHoneytoken(port, headers) {
+  const page = await fetch(`http://127.0.0.1:${port}/index.html`, { headers });
+  const cookie = sessionCookie(page);
+  const href = honeytokenHref(await page.text());
+  if (!cookie || !href) throw new Error("form page did not carry a session cookie and a honeytoken link");
+  await fetch(`http://127.0.0.1:${port}${href}`, { headers: { ...headers, cookie } });
+  return { cookie };
+}
+
 async function runCase(port, testCase) {
   const client = testCase.client === null ? undefined : (testCase.client ?? baseClient());
-  const headers = baseHeaders(testCase.headers);
+  let headers = baseHeaders(testCase.headers);
+  if (testCase.setup) {
+    headers = { ...headers, ...(await testCase.setup(port, headers)) };
+  }
   let challengeToken;
   if (client && testCase.challenge !== false) {
     const challengeResponse = await fetch(`http://127.0.0.1:${port}/api/challenge`, { headers });
@@ -355,7 +407,13 @@ async function runCase(port, testCase) {
     method: "POST",
     headers,
     body: JSON.stringify({
-      form: { name: testCase.name, email: "demo@example.com", company: "Demo", message: "crosscheck" },
+      form: {
+        name: testCase.name,
+        email: "demo@example.com",
+        company: "Demo",
+        message: "crosscheck",
+        ...testCase.form,
+      },
       ...(challengeToken ? { challengeToken } : {}),
       ...(client ? { client } : {}),
     }),
@@ -379,6 +437,181 @@ async function runCase(port, testCase) {
 
   return { fired, missing, extra, verdictOk, verdict: data.verdict, expectedVerdict, score: data.score };
 }
+
+const GOOGLEBOT_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+
+const PROTECTION_CHECKS = [
+  {
+    name: "form page carries the hidden honeytoken and honeypot field",
+    async run({ base }) {
+      const html = await (await fetch(`${base}/index.html`, { headers: baseHeaders() })).text();
+      const href = honeytokenHref(html);
+      return Boolean(href && html.includes('tabindex="-1"') && html.includes('name="hp_check"'));
+    },
+  },
+  {
+    name: "robots.txt disallows the honeytoken and the training crawlers",
+    async run({ base }) {
+      const href = honeytokenHref(await (await fetch(`${base}/index.html`)).text());
+      const robots = await (await fetch(`${base}/robots.txt`)).text();
+      return robots.includes(`Disallow: ${href}`) && robots.includes("User-agent: GPTBot");
+    },
+  },
+  {
+    name: "scanner bait path is refused and logged",
+    async run({ base }) {
+      const response = await fetch(`${base}/.env`, {
+        headers: baseHeaders({ "x-forwarded-for": "198.51.100.9" }),
+      });
+      const body = await response.json();
+      const events = (await (await fetch(`${base}/api/protection`)).json()).events;
+      return (
+        response.status === 404 &&
+        body.error === "Not Found" &&
+        events.some((event) => event.rule === "tripwire" && event.path === "/.env" && event.ip === "198.51.100.9")
+      );
+    },
+  },
+  {
+    name: "SQL injection in the query string is refused",
+    async run({ base }) {
+      const response = await fetch(`${base}/?q=1%27%20OR%201=1--`, { headers: baseHeaders() });
+      return response.status === 403 && (await response.json()).rule === "attack-signatures";
+    },
+  },
+  {
+    name: "AI training crawler refused by the bot policy",
+    async run({ base }) {
+      const response = await fetch(`${base}/`, {
+        headers: { "user-agent": "GPTBot/1.1 (+https://openai.com/gptbot)" },
+      });
+      return response.status === 403 && (await response.json()).rule === "bots";
+    },
+  },
+  {
+    name: "installation probe gets a deterministic denial",
+    async run({ base }) {
+      const response = await fetch(`${base}/`, { headers: { "user-agent": "BotSignal-Test/1.0" } });
+      return response.status === 403 && (await response.json()).rule === "test-trigger";
+    },
+  },
+  {
+    name: "crawler the edge verified is not trapped by the honeytoken",
+    async run({ base }) {
+      const href = honeytokenHref(await (await fetch(`${base}/index.html`)).text());
+      const response = await fetch(`${base}${href}`, {
+        headers: {
+          "user-agent": GOOGLEBOT_UA,
+          "x-forwarded-for": "66.249.66.1",
+          "x-crawler-verification": "verified",
+        },
+      });
+      return response.status === 404 && (await response.text()) === "Not found";
+    },
+  },
+  {
+    name: "unverified Googlebot claim on the honeytoken is still trapped",
+    async run({ base }) {
+      const href = honeytokenHref(await (await fetch(`${base}/index.html`)).text());
+      const response = await fetch(`${base}${href}`, {
+        headers: { "user-agent": GOOGLEBOT_UA, "x-forwarded-for": "203.0.113.77" },
+      });
+      const events = (await (await fetch(`${base}/api/protection`)).json()).events;
+      return (
+        response.status === 404 &&
+        (await response.json()).error === "Not Found" &&
+        events.some((event) => event.rule === "honeytoken" && event.blocked && event.ip === "203.0.113.77")
+      );
+    },
+  },
+  {
+    name: "cross-site embedded request to bait is not attributed",
+    async run({ base }) {
+      const response = await fetch(`${base}/.env`, {
+        headers: baseHeaders({
+          "sec-fetch-site": "cross-site",
+          "sec-fetch-mode": "no-cors",
+          "sec-fetch-dest": "image",
+          "x-forwarded-for": "198.51.100.33",
+        }),
+      });
+      const events = (await (await fetch(`${base}/api/protection`)).json()).events;
+      return (
+        response.status === 404 &&
+        (await response.text()) === "Not found" &&
+        events.some((event) => event.rule === "tripwire" && event.state === "DRY_RUN" && event.ip === "198.51.100.33")
+      );
+    },
+  },
+  {
+    name: "absolute-form request target cannot dodge the submit limit",
+    env: { SUBMIT_RATE_LIMIT_MAX: "1" },
+    async run({ base }) {
+      const url = new URL(base);
+      const statuses = [];
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        statuses.push(
+          await new Promise((resolve, reject) => {
+            const outgoing = httpRequest(
+              {
+                host: url.hostname,
+                port: url.port,
+                method: "POST",
+                path: `http://forms.example${"/api/submit"}`,
+                headers: { ...baseHeaders(), host: "forms.example" },
+              },
+              (response) => {
+                response.resume();
+                resolve(response.statusCode);
+              },
+            );
+            outgoing.on("error", reject);
+            outgoing.end(JSON.stringify({ form: { name: "absolute", email: "absolute@example.com" } }));
+          }),
+        );
+      }
+      return statuses[0] !== 429 && statuses[1] === 429;
+    },
+  },
+  {
+    name: "submit flood is throttled with Retry-After",
+    env: { SUBMIT_RATE_LIMIT_MAX: "2" },
+    async run({ base }) {
+      const statuses = [];
+      let retryAfter = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await fetch(`${base}/api/submit`, {
+          method: "POST",
+          headers: baseHeaders(),
+          body: JSON.stringify({ form: { name: "flood", email: "flood@example.com" } }),
+        });
+        statuses.push(response.status);
+        retryAfter = response.headers.get("retry-after");
+      }
+      return statuses[0] !== 429 && statuses[1] !== 429 && statuses[2] === 429 && Number(retryAfter) > 0;
+    },
+  },
+  {
+    name: "native JA4 over HTTPS exposes a script posing as Chrome",
+    scheme: "https",
+    env: {
+      TLS_CERT_FILE: join(fixturesDir, "tls-localhost-cert.pem"),
+      TLS_KEY_FILE: join(fixturesDir, "tls-localhost-key.pem"),
+    },
+    async run({ base }) {
+      const response = await undiciFetch(`${base}/api/submit`, {
+        method: "POST",
+        dispatcher: insecureAgent,
+        headers: baseHeaders(),
+        body: JSON.stringify({ form: { name: "tls", email: "tls@example.com" } }),
+      });
+      const data = await response.json();
+      return data.signals.some(
+        (signal) => signal.layer === "server" && signal.id === "tls-browser-profile-mismatch",
+      );
+    },
+  },
+];
 
 const basePort = Number(process.env.PORT ?? 8899);
 let port = basePort;
@@ -412,5 +645,32 @@ for (const testCase of CASES) {
 
 server.kill();
 console.log("-".repeat(96));
-console.log(failures === 0 ? `All ${CASES.length} checks wired correctly.` : `${failures} of ${CASES.length} checks failed.`);
-process.exit(failures === 0 ? 0 : 1);
+
+console.log("");
+console.log("request protection                                               result");
+console.log("-".repeat(76));
+let protectionFailures = 0;
+for (const check of PROTECTION_CHECKS) {
+  port += 1;
+  const scheme = check.scheme ?? "http";
+  const checkServer = await startServer(port, check.env ?? {}, scheme);
+  let ok = false;
+  try {
+    ok = await check.run({ base: `${scheme}://127.0.0.1:${port}` });
+  } catch (error) {
+    console.log(`    error: ${error.message}`);
+  }
+  checkServer.kill();
+  if (!ok) protectionFailures += 1;
+  console.log(`[protection] ${check.name.padEnd(62)} ${ok ? "ok" : "broken"}`);
+}
+console.log("-".repeat(76));
+
+const total = CASES.length + PROTECTION_CHECKS.length;
+const totalFailures = failures + protectionFailures;
+console.log(
+  totalFailures === 0
+    ? `All ${total} checks wired correctly (${CASES.length} submissions, ${PROTECTION_CHECKS.length} protection).`
+    : `${totalFailures} of ${total} checks failed.`,
+);
+process.exit(totalFailures === 0 ? 0 : 1);

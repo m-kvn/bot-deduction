@@ -1,0 +1,495 @@
+{
+  "measuredAt": "2026-10-10T06:03:31.040Z",
+  "repetitions": 3,
+  "browsers": [
+    {
+      "name": "Google Chrome",
+      "origin": "localhost",
+      "attempt": 1,
+      "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
+      "ja3Hash": "9eeaae94fca1774e7d53057a2822732f",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Google Chrome",
+      "origin": "localhost",
+      "attempt": 2,
+      "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
+      "ja3Hash": "4beed428a7a300eace11f04325380f53",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Google Chrome",
+      "origin": "localhost",
+      "attempt": 3,
+      "ja4": "t13d1517h2_8daaf6152771_cb7bf5808d99",
+      "ja3Hash": "eaa95b87d35c5000829dbb0cea575329",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Google Chrome",
+      "origin": "127.0.0.1",
+      "attempt": 1,
+      "ja4": "t13i1516h2_8daaf6152771_cb7bf5808d99",
+      "ja3Hash": "299ab72c23a532837e384f688355ee3a",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Google Chrome",
+      "origin": "127.0.0.1",
+      "attempt": 2,
+      "ja4": "t13i1516h2_8daaf6152771_cb7bf5808d99",
+      "ja3Hash": "28dbec1ebdcc305844bed981695fc938",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Google Chrome",
+      "origin": "127.0.0.1",
+      "attempt": 3,
+      "ja4": "t13i1516h2_8daaf6152771_cb7bf5808d99",
+      "ja3Hash": "3445539b7d42a062bd212de21cc38f28",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Microsoft Edge",
+      "origin": "localhost",
+      "attempt": 1,
+      "ja4": "t13d1516h2_8daaf6152771_806a8c22fdea",
+      "ja3Hash": "0c1590b31dcac2f9ac0b340c3efa67c5",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Microsoft Edge",
+      "origin": "localhost",
+      "attempt": 2,
+      "ja4": "t13d1516h2_8daaf6152771_806a8c22fdea",
+      "ja3Hash": "f5150581abf0b456a451757f4115ffb0",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Microsoft Edge",
+      "origin": "localhost",
+      "attempt": 3,
+      "ja4": "t13d1516h2_8daaf6152771_806a8c22fdea",
+      "ja3Hash": "bd9b3118ec6ddff2b1faf65c1102cf8e",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Microsoft Edge",
+      "origin": "127.0.0.1",
+      "attempt": 1,
+      "ja4": "t13i1515h2_8daaf6152771_806a8c22fdea",
+      "ja3Hash": "899710a7a4fbd6224b5325fb7c01730b",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Microsoft Edge",
+      "origin": "127.0.0.1",
+      "attempt": 2,
+      "ja4": "t13i1515h2_8daaf6152771_806a8c22fdea",
+      "ja3Hash": "9d5e74003a7287105aeaedc1b3e634c1",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Microsoft Edge",
+      "origin": "127.0.0.1",
+      "attempt": 3,
+      "ja4": "t13i1515h2_8daaf6152771_806a8c22fdea",
+      "ja3Hash": "1acea9b3182e6404247266975a11fe6e",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": true,
+      "greaseInExtensions": true,
+      "mismatchesAsChrome": [],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Mozilla Firefox",
+      "origin": "localhost",
+      "attempt": 1,
+      "ja4": "t13d1517h2_8daaf6152771_3cbfd9057e0d",
+      "ja3Hash": "9d42e90b0225e779f03141ddcd699df2",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Mozilla Firefox",
+      "origin": "localhost",
+      "attempt": 2,
+      "ja4": "t13d1517h2_8daaf6152771_3cbfd9057e0d",
+      "ja3Hash": "9d42e90b0225e779f03141ddcd699df2",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Mozilla Firefox",
+      "origin": "localhost",
+      "attempt": 3,
+      "ja4": "t13d1517h2_8daaf6152771_3cbfd9057e0d",
+      "ja3Hash": "9d42e90b0225e779f03141ddcd699df2",
+      "serverName": "localhost",
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Mozilla Firefox",
+      "origin": "127.0.0.1",
+      "attempt": 1,
+      "ja4": "t13i1516h2_8daaf6152771_3cbfd9057e0d",
+      "ja3Hash": "a6d822a3f8c8542526830987918a61f9",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Mozilla Firefox",
+      "origin": "127.0.0.1",
+      "attempt": 2,
+      "ja4": "t13i1516h2_8daaf6152771_3cbfd9057e0d",
+      "ja3Hash": "a6d822a3f8c8542526830987918a61f9",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": []
+    },
+    {
+      "name": "Mozilla Firefox",
+      "origin": "127.0.0.1",
+      "attempt": 3,
+      "ja4": "t13i1516h2_8daaf6152771_3cbfd9057e0d",
+      "ja3Hash": "a6d822a3f8c8542526830987918a61f9",
+      "serverName": null,
+      "alpn": [
+        "h2",
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": []
+    }
+  ],
+  "scripts": [
+    {
+      "name": "Node https.get",
+      "ja4": "t13d521100_b262b3658495_8e6e362c5eac",
+      "ja3Hash": "944d1e1858cd278718f8a46b65d3212f",
+      "serverName": "localhost",
+      "alpn": [],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "sent no ALPN",
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": null
+    },
+    {
+      "name": "Node fetch (undici)",
+      "ja4": "t13d5212h1_b262b3658495_8e6e362c5eac",
+      "ja3Hash": "d67b094811e5145139d7cea5f014309f",
+      "serverName": "localhost",
+      "alpn": [
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "offered ALPN h1 instead of HTTP/2",
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": null
+    },
+    {
+      "name": "Node http2.connect",
+      "ja4": "t13d5212h2_b262b3658495_8e6e362c5eac",
+      "ja3Hash": "d67b094811e5145139d7cea5f014309f",
+      "serverName": "localhost",
+      "alpn": [
+        "h2"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": null
+    },
+    {
+      "name": "curl.exe (Windows, Schannel)",
+      "ja4": "t13d2012h1_2b729b4bf6f3_36bf25f296df",
+      "ja3Hash": "2e6c64f66822fc35b6a7a128b557f1de",
+      "serverName": "localhost",
+      "alpn": [
+        "http/1.1"
+      ],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "offered ALPN h1 instead of HTTP/2",
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": null
+    },
+    {
+      "name": "PowerShell Invoke-WebRequest",
+      "ja4": "t13d201100_2b729b4bf6f3_36bf25f296df",
+      "ja3Hash": "68b3ecfaf0034bb9fcbecd518b5ab8d4",
+      "serverName": "localhost",
+      "alpn": [],
+      "supportedVersions": [
+        "304",
+        "303",
+        "302",
+        "301"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "sent no ALPN",
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": null
+    },
+    {
+      "name": "Python urllib",
+      "ja4": "t13d181100_85036bcba153_d41ae481755e",
+      "ja3Hash": "93c7d42c0df602fb91589311534831f5",
+      "serverName": "localhost",
+      "alpn": [],
+      "supportedVersions": [
+        "304",
+        "303"
+      ],
+      "greaseInCiphers": false,
+      "greaseInExtensions": false,
+      "mismatchesAsChrome": [
+        "sent no ALPN",
+        "Chromium User-Agent sent no GREASE values"
+      ],
+      "mismatchesAsOwnFamily": null
+    }
+  ]
+}

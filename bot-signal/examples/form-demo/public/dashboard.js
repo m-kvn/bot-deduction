@@ -52,7 +52,39 @@ function renderRow(item) {
   return tr;
 }
 
+const protectionRows = document.getElementById("protection-rows");
+const protectionMode = document.getElementById("protection-mode");
+
+function renderProtectionRow(event) {
+  const tr = document.createElement("tr");
+  tr.appendChild(cell(new Date(event.at).toLocaleTimeString()));
+  tr.appendChild(cell(event.rule, event.blocked ? "bad" : ""));
+  tr.appendChild(cell(`${event.method} ${event.path}`, "small"));
+  tr.appendChild(cell(`${event.ip} · ${event.userAgent.slice(0, 40) || "no UA"}`, "muted small"));
+  const outcome = event.blocked ? "blocked" : event.state === "DRY_RUN" ? "observed (dry run)" : "observed";
+  tr.appendChild(cell(`${outcome} — ${event.reason}`, "muted small"));
+  return tr;
+}
+
+async function refreshProtection() {
+  const response = await fetch("/api/protection");
+  if (!response.ok) return;
+  const data = await response.json();
+  protectionMode.textContent = `· ${data.mode} mode over ${data.transport}`;
+  protectionRows.replaceChildren();
+  if (!data.events.length) {
+    const tr = document.createElement("tr");
+    const td = cell("Nothing tripped yet.", "muted");
+    td.colSpan = 5;
+    tr.appendChild(td);
+    protectionRows.appendChild(tr);
+    return;
+  }
+  for (const event of data.events) protectionRows.appendChild(renderProtectionRow(event));
+}
+
 async function refresh() {
+  refreshProtection();
   const response = await fetch("/api/submissions");
   const data = await response.json();
 

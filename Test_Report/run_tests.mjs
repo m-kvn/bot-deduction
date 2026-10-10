@@ -286,12 +286,12 @@ async function browserCase(browser, spec) {
 }
 
 const crosscheck = await runCrosscheck();
-if (crosscheck.code !== 0 || results.filter((item) => item.category === "Server detection").length !== 30) {
+if (crosscheck.code !== 0 || results.filter((item) => item.category === "Server detection").length !== 34) {
   add({
     category: "Server detection",
     name: "Server cross-check harness completes",
     vector: "crosscheck.mjs",
-    expected: "30 parsed cases, exit 0",
+    expected: "34 parsed cases, exit 0",
     actual: `${results.filter((item) => item.category === "Server detection").length} parsed, exit ${crosscheck.code}`,
     passed: false,
     evidence: crosscheck.stderr || crosscheck.stdout,
@@ -309,6 +309,8 @@ const server = spawn(process.execPath, [fileURLToPath(serverPath)], {
     PORT: String(port),
     DB_FILE: ":memory:",
     POW_ESCALATION_BITS: "0",
+    RATE_LIMIT_MAX: "100000",
+    SUBMIT_RATE_LIMIT_MAX: "100000",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -884,6 +886,8 @@ try {
         "client:impossible-observation-window",
         "client:invalid-proof-of-work",
         "client:missing-telemetry-stream",
+        "client:honeypot-field-filled",
+        "client:honeytoken-tripped",
       ].filter((id) => plumbingSignals.has(id));
       add({
         category: "False-positive guard",
@@ -1017,6 +1021,73 @@ try {
         response,
         evidence: `HTTP ${response.status}; signals: ${response.data.signals?.map((s) => `${s.layer}:${s.id}`).join(", ") || "none"}`,
         severity: "Critical",
+      });
+    } finally {
+      await context.close();
+    }
+  }
+
+  {
+    const { context, page } = await newPage(headed);
+    try {
+      for (const field of await page.locator("#contact-form input, #contact-form textarea").all()) {
+        const name = await field.getAttribute("name");
+        await field.fill(name === "email" ? "every.field@example.test" : `Every field ${name}`);
+      }
+      const button = await page.locator('button[type="submit"]').boundingBox();
+      const response = await actionSubmission(page, () =>
+        page.mouse.click(button.x + button.width / 2, button.y + button.height / 2),
+      );
+      const fired = (response.data.signals ?? []).map((signal) => `${signal.layer}:${signal.id}`);
+      add({
+        category: "Honeypot",
+        name: "Form bot that fills every input trips the hidden honeypot field",
+        vector: "Fills every input in the form, including the off-screen, unfocusable hp_check field",
+        expected: "AGENT with client:honeypot-field-filled",
+        actual: `${String(response.data.verdict).toUpperCase()}; honeypot ${fired.includes("client:honeypot-field-filled") ? "fired" : "silent"}`,
+        passed: response.data.verdict === "agent" && fired.includes("client:honeypot-field-filled"),
+        evidence: `HTTP ${response.status}; signals: ${fired.join(", ") || "none"}`,
+        severity: "High",
+      });
+    } finally {
+      await context.close();
+    }
+  }
+
+  {
+    const { context, page } = await newPage(headed);
+    try {
+      const links = await page.evaluate(() =>
+        [...document.links].map((link) => link.href).filter((href) => href.startsWith(location.origin)),
+      );
+      const crawled = [];
+      for (const href of links) {
+        const response = await context.request.get(href);
+        crawled.push(`${new URL(href).pathname} → ${response.status()}`);
+      }
+      await page.locator('input[name="name"]').click();
+      await page.keyboard.type("Link Harvester", { delay: 85 });
+      await page.locator('input[name="email"]').click();
+      await page.keyboard.type("harvester@example.test", { delay: 78 });
+      const button = await page.locator('button[type="submit"]').boundingBox();
+      await page.mouse.move(button.x + button.width / 2 - 60, button.y - 30, { steps: 6 });
+      const response = await actionSubmission(page, () =>
+        page.mouse.click(button.x + button.width / 2, button.y + button.height / 2),
+      );
+      const fired = (response.data.signals ?? []).map((signal) => `${signal.layer}:${signal.id}`);
+      const events = (await (await fetch(`${base}/api/protection`)).json()).events;
+      add({
+        category: "Honeypot",
+        name: "Link-harvesting crawler follows the hidden honeytoken",
+        vector: "Collects every same-origin href on the form page, requests each one, then fills the form",
+        expected: "AGENT with client:honeytoken-tripped, trap request refused and logged",
+        actual: `${String(response.data.verdict).toUpperCase()}; honeytoken ${fired.includes("client:honeytoken-tripped") ? "fired" : "silent"}; ${events.filter((event) => event.rule === "honeytoken").length} trap event(s)`,
+        passed:
+          response.data.verdict === "agent" &&
+          fired.includes("client:honeytoken-tripped") &&
+          events.some((event) => event.rule === "honeytoken" && event.blocked),
+        evidence: `Crawled: ${crawled.join("; ")}; signals: ${fired.join(", ") || "none"}`,
+        severity: "High",
       });
     } finally {
       await context.close();
